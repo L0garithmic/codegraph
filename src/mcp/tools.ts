@@ -45,7 +45,7 @@ import { createHash } from 'crypto';
 import { clamp, validatePathWithinRoot, validateProjectPath, isConfigLeafNode, CONFIG_LEAF_LANGUAGES } from '../utils';
 import { guardLabel, guardsForFileSync, siteKey, supportsBranchGuards, warmBranchGuardGrammars } from '../graph/branch-guards';
 import { findDynamicBoundaries, type BoundarySite } from '../graph/dynamic-boundary-report';
-import { countImplementers } from '../graph/type-hierarchy';
+import { countImplementers, DISPATCH_MIN_IMPLEMENTERS } from '../graph/type-hierarchy';
 import {
   findAllSymbols,
   resolveNamedSymbolFlow,
@@ -3341,7 +3341,6 @@ export class ToolHandler {
    */
   private buildPolymorphicBoundaries(cg: CodeGraph, candidates: Array<{ token: string; family: Node[] }>, named: Map<string, Node>): string {
     const CLASSY = new Set(['class', 'struct', 'interface', 'trait', 'protocol', 'abstract']);
-    const MIN_IMPL = 8;     // a supertype needs >= this many implementers to count as "polymorphic"
     const MIN_SUPPORT = 2;  // >= this many sampled definers must share the supertype (ties it to the token)
     const SAMPLE = 40;      // family members inspected per token
     const MAX_NOTES = 3;
@@ -3436,7 +3435,8 @@ export class ToolHandler {
         // types, not edges: a class tied to its supertype by both a parsed
         // `extends` and a synthesized `implements` is one implementation.
         const impl = countImplementers(cg, node.id);
-        if (impl < MIN_IMPL) continue;
+        // A supertype needs >= DISPATCH_MIN_IMPLEMENTERS implementers to count as "polymorphic".
+        if (impl < DISPATCH_MIN_IMPLEMENTERS) continue;
         if (best && impl <= best.impl) continue;
         if (memberOfSupertype(node.id, memberName, callableFamily) === 'absent') continue;
         best = { node, impl, targets };

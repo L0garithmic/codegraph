@@ -82,7 +82,7 @@ export const laravelResolver: FrameworkResolver = {
     }
 
     // Pattern 4: Controller method references
-    const controllerMatch = ref.referenceName.match(/^([A-Z][a-zA-Z]+Controller)@(\w+)$/);
+    const controllerMatch = ref.referenceName.match(/^([A-Za-z_][A-Za-z0-9_]*Controller)@(\w+)$/);
     if (controllerMatch) {
       const [, controller, method] = controllerMatch;
       const result = resolveControllerMethod(controller!, method!, context);

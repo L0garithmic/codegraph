@@ -30,11 +30,12 @@ import { isTestFile } from '../../search/query-utils';
 export const HUB_THRESHOLD = 40;
 
 /**
- * Below this resolution confidence an edge is a name-only guess. The viewer
- * folds these away behind "Uncertain · N name-only matches, confidence < 0.6"
- * rather than mixing them into the rails as if they were resolved.
+ * Below this resolution confidence an edge is a name-only guess. Owned by the
+ * graph layer (the boundary report and the flow strip must agree); re-exported
+ * here so the wire surface keeps its import path.
  */
-export const UNCERTAIN_BELOW = 0.6;
+import { UNCERTAIN_BELOW } from '../../graph/dynamic-boundary-report';
+export { UNCERTAIN_BELOW };
 
 /** Caller groups (one per calling symbol) returned for a node. */
 export const MAX_INCOMING_GROUPS = 300;

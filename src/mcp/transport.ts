@@ -395,8 +395,7 @@ export class SocketTransport extends LineBasedJsonRpcTransport {
 
   stop(): void {
     if (this.stopped) return;
-    this.stopped = true;
-    this.rejectPending('Transport stopped');
+    this.finish('Transport stopped');
     if (!this.socket.destroyed) {
       this.socket.end();
       this.socket.destroy();
@@ -425,9 +424,14 @@ export class SocketTransport extends LineBasedJsonRpcTransport {
   }
 
   private handleSocketClose(): void {
+    this.finish('Socket closed');
+  }
+
+  /** Mark the transport done once: reject in-flight requests, run close handlers. */
+  private finish(reason: string): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.rejectPending('Socket closed');
+    this.rejectPending(reason);
     for (const h of this.closeHandlers) {
       try { h(); } catch { /* never let a close-handler take the daemon down */ }
     }

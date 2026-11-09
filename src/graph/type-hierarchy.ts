@@ -407,7 +407,10 @@ function matchOverrides(
   const byName = new Map<string, { member: Node; ownerId: string }>();
   // `chain` is nearest-first and `membersOf` preserves the order of the ids it
   // was given, so the first entry for a name is the nearest declaration.
+  // Only overridable kinds count, as on the focus side: a nested class that
+  // shares a name with a farther ancestor's method must not hide that method.
   for (const { member, ownerId } of baseMembers) {
+    if (!OVERRIDABLE_KINDS.has(member.kind)) continue;
     if (!byName.has(member.name)) byName.set(member.name, { member, ownerId });
   }
 

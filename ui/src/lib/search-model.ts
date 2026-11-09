@@ -90,7 +90,9 @@ export interface Palette {
 /** Plural caption for a kind bucket: "Methods", "Type aliases", "Files". */
 export function kindGroupTitle(kind: string, count: number): string {
   const word = kind.replace(/_/g, ' ');
-  const many = word.endsWith('s') ? `${word}es` : `${word}s`;
+  const many = /[^aeiou]y$/.test(word)
+    ? `${word.slice(0, -1)}ies`
+    : word.endsWith('s') ? `${word}es` : `${word}s`;
   const title = count === 1 ? word : many;
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
@@ -329,5 +331,7 @@ export function buildEntryPalette(
 /** Wrap-around ↑/↓ over the flat item list. */
 export function moveSelection(index: number, delta: number, length: number): number {
   if (length === 0) return 0;
-  return (((index + delta) % length) + length) % length;
+  // Clamp a stale index (answers shrank) so the step starts from what is shown.
+  const from = Math.min(Math.max(index, 0), length - 1);
+  return (((from + delta) % length) + length) % length;
 }

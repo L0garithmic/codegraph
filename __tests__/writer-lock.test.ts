@@ -136,4 +136,13 @@ describe('writer lock (#1740)', () => {
 
     expect(() => new MCPEngine({ writerLockRoot: root })).toThrow(/writer lock held/i);
   });
+
+  it('does not reclaim a just-created empty lock file that its writer is still filling', () => {
+    const root = makeProject();
+    // The O_EXCL fallback leaves an empty writer.pid until the creator writes it.
+    fs.writeFileSync(getWriterPidPath(root), '', { mode: 0o600 });
+    const r = tryAcquireWriterLock(root, 'direct');
+    expect(r.kind).toBe('taken');
+    expect(fs.existsSync(getWriterPidPath(root))).toBe(true);
+  });
 });

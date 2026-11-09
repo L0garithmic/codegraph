@@ -411,4 +411,16 @@ describe('the trail in the URL', () => {
     expect(hopLabel(hop('file:src/bin/codegraph.ts', 'start'))).toBe('codegraph.ts');
     expect(hopLabel(hop('method:ada8ef1603fc03e3566eec72dc91138f', 'down'))).toBe('ada8ef16…');
   });
+
+  it('pluralizes a kind ending in y as -ies (not "propertys")', () => {
+    expect(kindGroupTitle('property', 2)).toBe('Properties');
+    expect(kindGroupTitle('property', 1)).toBe('Property');
+  });
+
+  it('wraps a keyboard step from a stale index that is past the end', () => {
+    // Answers shrank to 3 items while the selection stayed at 4: the step must
+    // start from the item shown (the last), so ↓ wraps to item 0.
+    expect(moveSelection(4, 1, 3)).toBe(0);
+    expect(moveSelection(4, -1, 3)).toBe(1);
+  });
 });

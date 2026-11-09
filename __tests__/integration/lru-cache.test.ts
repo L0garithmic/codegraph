@@ -12,6 +12,10 @@ import { describe, it, expect } from 'vitest';
 import { LRUCache } from '../../src/resolution/lru-cache';
 
 describe('LRUCache', () => {
+  it('rejects a capacity that floors to zero (0.5)', () => {
+    expect(() => new LRUCache<string, number>(0.5)).toThrow();
+  });
+
   it('enforces capacity by evicting the oldest entry on overflow', () => {
     const cache = new LRUCache<string, number>(3);
     cache.set('a', 1);

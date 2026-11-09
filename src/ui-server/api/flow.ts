@@ -313,8 +313,12 @@ export function parseFlowQuery(query: URLSearchParams): FlowQuery {
 export function flowEdgeLabel(edge: Edge, upward: boolean): string {
   const meta = (edge.metadata ?? {}) as Record<string, unknown>;
   const parts: string[] = [];
-  if (edge.provenance === 'heuristic' && typeof meta.synthesizedBy === 'string') {
-    const mechanism = meta.synthesizedBy.replace(/-/g, ' ');
+  // Same predicate as `synthesized` in toFlowEdge: a heuristic hop is always a bridge.
+  if (edge.provenance === 'heuristic') {
+    const mechanism =
+      typeof meta.synthesizedBy === 'string' && meta.synthesizedBy
+        ? meta.synthesizedBy.replace(/-/g, ' ')
+        : 'heuristic';
     parts.push(`via ${mechanism}`);
     if (typeof meta.via === 'string' && meta.via) parts.push(meta.via);
     if (typeof meta.registeredAt === 'string' && meta.registeredAt) {
@@ -712,7 +716,9 @@ export async function buildFlow(
       reason:
         flows.length > 0
           ? null
-          : 'None of the symbols on this trail are still in the index. Re-index, or start a new trail.',
+          : raw.length === 1
+            ? 'Only one symbol on this trail is still in the index, and a flow needs two. Re-index, or start a new trail.'
+            : 'None of the symbols on this trail are still in the index. Re-index, or start a new trail.',
       timing: { elapsedMs: Date.now() - started },
     };
   }

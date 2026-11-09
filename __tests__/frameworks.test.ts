@@ -854,6 +854,33 @@ public class UserController {
     expect(references.map(r => [r.fromNodeId, r.referenceName])).toEqual(nodes.map(n => [n.id, 'handle']));
   });
 
+  it('does not bind a :prefix key to a sibling key that only shares its characters (app.cache vs app.cacheable)', () => {
+    const cfg = (id: string, key: string) => ({
+      id, kind: 'constant', name: key, qualifiedName: key, language: 'properties', filePath: 'application.properties',
+      startLine: 1, endLine: 1, startColumn: 0, endColumn: 0, updatedAt: 0,
+    });
+    const ctx = { getNodesByKind: () => [cfg('k-sibling', 'app.cacheable.enabled')] } as any;
+    const ref = { referenceName: 'app.cache:prefix', referenceKind: 'references', language: 'java', fromNodeId: 'f', line: 1, column: 0, filePath: 'Cache.java' } as any;
+    expect(springResolver.resolve!(ref, ctx)).toBeNull();
+  });
+
+  it('gives each controller in one file its own class-level prefix', () => {
+    const src = `@RestController
+@RequestMapping("/a")
+public class ACtl {
+  @GetMapping("/x")
+  public String x() { return "ok"; }
+}
+@RestController
+@RequestMapping("/b")
+public class BCtl {
+  @GetMapping("/y")
+  public String y() { return "ok"; }
+}`;
+    const { nodes } = springResolver.extract!('Ctls.java', src);
+    expect(nodes.map(n => n.name)).toEqual(['GET /a/x', 'GET /b/y']);
+  });
+
   it.each(['ErrorHandler.PATH', 'PATH', 'value = ErrorHandler.PATH', 'path = PATH'])(
     'resolves a same-file constant prefix in @RequestMapping(%s) (#1461)', (args) => {
       const src = `@Controller
@@ -2032,5 +2059,25 @@ export class UsersController {
     const { nodes, references } = nestjsResolver.extract!('users.controller.ts', src);
     expect(nodes.map((n) => n.name)).toEqual(['GET /users/real']);
     expect(references.map((r) => r.referenceName)).toEqual(['real']);
+  });
+
+  it('resolves a Controller@method reference whose controller name has a digit or underscore', () => {
+    // claimsReference accepts Admin2Controller@index; resolve must accept it too.
+    const method = { id: 'method:admin2:index', kind: 'method', name: 'index', filePath: 'app/Http/Controllers/Admin2Controller.php' };
+    const context = {
+      fileExists: () => true,
+      getNodesInFile: () => [method],
+      getNodesByName: () => [],
+    };
+    const ref = {
+      fromNodeId: 'route:web:1',
+      referenceName: 'Admin2Controller@index',
+      referenceKind: 'references' as const,
+      line: 1,
+      column: 0,
+      filePath: 'routes/web.php',
+      language: 'php' as const,
+    };
+    expect(laravelResolver.resolve(ref, context as any)?.targetNodeId).toBe(method.id);
   });
 });

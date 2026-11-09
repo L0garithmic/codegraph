@@ -69,6 +69,9 @@ export function decodeWriterLockInfo(raw: string): WriterLockInfo | null {
   }
 }
 
+/** How long an empty or unreadable lock file is presumed to be mid-write. */
+const LOCK_PUBLISH_GRACE_MS = 2000;
+
 /**
  * Atomically create `writer.pid` (link-into-place, O_EXCL fallback). If held
  * by a dead PID, clear and retry once. Does not steal from a live holder.
@@ -128,11 +131,16 @@ export function tryAcquireWriterLock(
   };
 
   let result = attempt();
+  // Without hard links the O_EXCL fallback leaves an empty file until its
+  // writer finishes. A competitor must not reclaim that as stale.
+  const freshlyCreated = result.kind === 'taken' && !result.existing && (() => {
+    try { return Date.now() - fs.statSync(pidPath).mtimeMs < LOCK_PUBLISH_GRACE_MS; } catch { return false; }
+  })();
   if (result.kind === 'taken' && result.existing && result.existing.pid === process.pid) {
     // Same process already holds it (daemon acquired before engine watch).
     return { kind: 'acquired', pidPath: result.pidPath, info: result.existing };
   }
-  if (result.kind === 'taken') {
+  if (result.kind === 'taken' && !freshlyCreated) {
     const existing = result.existing;
     if (!existing || existing.pid <= 0 || !isProcessAlive(existing.pid)) {
       // Stale — clear (pid-verified) and retry once.

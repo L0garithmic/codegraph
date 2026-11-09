@@ -167,7 +167,7 @@ export class GraphTraverser {
       nodes.set(startNode.id, startNode);
     }
 
-    this.dfsRecursive(startNode, 0, opts, nodes, edges, visited);
+    this.dfsRecursive(startNode, 0, opts, nodes, edges, visited, new Set<string>());
 
     return {
       nodes,
@@ -185,7 +185,8 @@ export class GraphTraverser {
     opts: Required<TraversalOptions>,
     nodes: Map<string, Node>,
     edges: Edge[],
-    visited: Set<string>
+    visited: Set<string>,
+    seenEdges: Set<string>
   ): void {
     if (visited.has(node.id) || nodes.size >= opts.limit || depth >= opts.maxDepth) {
       return;
@@ -210,7 +211,16 @@ export class GraphTraverser {
       if (nodes.size >= opts.limit) break;
 
       const nextNodeId = edge.source === node.id ? edge.target : edge.source;
-      if (visited.has(nextNodeId)) continue;
+      if (visited.has(nextNodeId)) {
+        // A further edge into a node already in the result (e.g. `calls` and
+        // `references` to the same target) is still a distinct edge, as in BFS (#1090).
+        const ek = `${edge.source}|${edge.target}|${edge.kind}|${edge.line ?? -1}|${edge.column ?? -1}`;
+        if (nodes.has(nextNodeId) && !seenEdges.has(ek)) {
+          seenEdges.add(ek);
+          edges.push(edge);
+        }
+        continue;
+      }
 
       const nextNode = neighborNodes.get(nextNodeId);
       if (!nextNode) continue;
@@ -222,10 +232,12 @@ export class GraphTraverser {
 
       // Add node and edge to result
       nodes.set(nextNode.id, nextNode);
+      const ek = `${edge.source}|${edge.target}|${edge.kind}|${edge.line ?? -1}|${edge.column ?? -1}`;
+      seenEdges.add(ek);
       edges.push(edge);
 
       // Recurse
-      this.dfsRecursive(nextNode, depth + 1, opts, nodes, edges, visited);
+      this.dfsRecursive(nextNode, depth + 1, opts, nodes, edges, visited, seenEdges);
     }
   }
 

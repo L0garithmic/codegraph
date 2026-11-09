@@ -214,6 +214,14 @@ export class ExploreSessionState {
   private readonly projects = new Map<string, MutableProjectState>();
 
   /**
+   * Counters of projects evicted from {@link projects}. Eviction drops the detail,
+   * never the count: decay (CG-19) reads `callCount`, and a project that comes back
+   * must continue its count rather than restart at 0. One small entry per project
+   * root queried this session.
+   */
+  private readonly retired = new Map<string, { callCount: number; responseBytes: number }>();
+
+  /**
    * File an emission. Returns the record as stored (with its session call
    * index), or `null` if the emission was unusable.
    */
@@ -248,7 +256,8 @@ export class ExploreSessionState {
 
   /** Explore calls made this session against a project (including evicted ones). */
   callCount(projectRoot: string): number {
-    return this.projects.get(exploreProjectKey(projectRoot))?.callCount ?? 0;
+    const key = exploreProjectKey(projectRoot);
+    return this.projects.get(key)?.callCount ?? this.retired.get(key)?.callCount ?? 0;
   }
 
   /** Every project this session has queried, least-recently-used first. */
@@ -282,9 +291,8 @@ export class ExploreSessionState {
 
   /**
    * Fetch a project's state, creating it if new, and mark it most-recently-used.
-   * Evicts the LRU project past the bound — dropping a project entirely (rather
-   * than its detail) is right here: a session that has moved on to four other
-   * repos is not about to re-ask the first one.
+   * Evicts the LRU project past the bound. Its detail goes; its counters are kept
+   * in {@link retired} so the count survives the bound.
    */
   private touch(key: string, projectRoot: string): MutableProjectState {
     const existing = this.projects.get(key);
@@ -293,12 +301,21 @@ export class ExploreSessionState {
       this.projects.set(key, existing);
       return existing;
     }
-    const created: MutableProjectState = { projectRoot, callCount: 0, responseBytes: 0, calls: [] };
+    const past = this.retired.get(key);
+    this.retired.delete(key);
+    const created: MutableProjectState = {
+      projectRoot,
+      callCount: past?.callCount ?? 0,
+      responseBytes: past?.responseBytes ?? 0,
+      calls: [],
+    };
     this.projects.set(key, created);
     while (this.projects.size > EXPLORE_SESSION_LIMITS.MAX_PROJECTS) {
-      const lru = this.projects.keys().next().value as string | undefined;
-      if (lru === undefined) break;
-      this.projects.delete(lru);
+      const lruKey = this.projects.keys().next().value as string | undefined;
+      if (lruKey === undefined) break;
+      const lru = this.projects.get(lruKey)!;
+      this.projects.delete(lruKey);
+      this.retired.set(lruKey, { callCount: lru.callCount, responseBytes: lru.responseBytes });
     }
     return created;
   }

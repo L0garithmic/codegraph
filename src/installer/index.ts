@@ -60,6 +60,27 @@ function getVersion(): string {
   }
 }
 
+/**
+ * What to tell the user when the global `npm install -g` of the CLI fails. The
+ * failure is not always a permission error (timeout, offline registry, missing
+ * npm), so the status names permission only for EACCES/EPERM, and the sudo hint
+ * is shown only on POSIX, where it applies.
+ */
+export function describeCliInstallFailure(
+  err: unknown,
+  platform: NodeJS.Platform = process.platform,
+): { status: string; hint?: string } {
+  const e = err as { message?: unknown; stderr?: unknown } | null;
+  const detail = `${String(e?.message ?? '')}\n${String(e?.stderr ?? '')}`;
+  if (/EACCES|EPERM/.test(detail)) {
+    return {
+      status: 'Could not install (permission denied)',
+      hint: platform === 'win32' ? undefined : 'Try: sudo npm install -g @colbymchenry/codegraph',
+    };
+  }
+  return { status: 'Could not install codegraph CLI' };
+}
+
 export interface RunInstallerOptions {
   /** Comma-separated target list, or `auto` / `all` / `none`. */
   target?: string;
@@ -121,9 +142,10 @@ export async function runInstallerWithOptions(opts: RunInstallerOptions): Promis
         // wedged npm can't hang the interactive installer forever (#1139).
         execSync('npm install -g @colbymchenry/codegraph', { stdio: 'pipe', windowsHide: true, timeout: 120_000 });
         s.stop('Installed codegraph CLI on PATH');
-      } catch {
-        s.stop('Could not install (permission denied)');
-        clack.log.warn('Try: sudo npm install -g @colbymchenry/codegraph');
+      } catch (err) {
+        const failure = describeCliInstallFailure(err);
+        s.stop(failure.status);
+        if (failure.hint) clack.log.warn(failure.hint);
       }
     } else {
       clack.log.info('Skipped CLI install — agents will not be able to launch the MCP server without it');
