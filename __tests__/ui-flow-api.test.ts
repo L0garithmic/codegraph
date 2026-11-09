@@ -292,6 +292,10 @@ describe('flowEdgeLabel', () => {
     expect(flowEdgeLabel(edge({ synthesizedBy: 'react-render' }), false)).toBe('via react render');
   });
 
+  it('labels a heuristic hop with no synthesizer name as a bridge, never a plain call', () => {
+    expect(flowEdgeLabel(edge({}), false)).toBe('via heuristic');
+  });
+
   it('says "called by" when the reader walked the edge backwards', () => {
     expect(flowEdgeLabel(edge({}, 'resolved'), true)).toBe('called by');
     expect(flowEdgeLabel(edge({}, 'resolved'), false)).toBe('calls');
@@ -590,6 +594,16 @@ describe('GET /api/flow — a trail read as a flow', () => {
     expect(payload.flows).toEqual([]);
     expect(payload.unresolved).toEqual(['method:gone', 'method:also-gone']);
     expect(payload.reason).toMatch(/still in the index/);
+  });
+
+  it('says one symbol is still live when a trail has one live and one missing id', async () => {
+    const forward = await getFlow('?from=bootstrap&to=toRow');
+    const liveId: string = forward.flows[0].hops[0].node.id;
+    const payload = await getFlow(`?hop=${encodeURIComponent(`s${liveId}`)}&hop=dmethod%3Agone`);
+    expect(payload.flows).toEqual([]);
+    expect(payload.unresolved).toEqual(['method:gone']);
+    expect(payload.reason).toMatch(/Only one symbol on this trail is still in the index/);
+    expect(payload.reason).not.toMatch(/None of the symbols/);
   });
 });
 

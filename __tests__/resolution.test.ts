@@ -2160,6 +2160,50 @@ func main() {
       expect(matchByQualifiedName(ref, ctx)?.targetNodeId).toBe('m:b');
     });
 
+    it('matchByQualifiedName declines a suffix match shared by two cross-file symbols (#1079)', () => {
+      // `Svc::run` is a suffix of two definitions in other files. A first-indexed
+      // pick here is the #1079 collapse, so the partial fallback must return null.
+      const a = methodNode('m:a', 'a/svc.cpp', 'Svc::run', 'run');
+      const b = methodNode('m:b', 'b/svc.cpp', 'Svc::run', 'run');
+      const ctx: ResolutionContext = {
+        getNodesInFile: () => [],
+        getNodesByName: (name) => [a, b].filter((n) => n.name === name),
+        getNodesByQualifiedName: () => [],
+        getNodesByKind: () => [],
+        fileExists: () => false,
+        readFile: () => null,
+        getProjectRoot: () => '',
+        getAllFiles: () => [],
+      };
+      const ref: UnresolvedRef = {
+        fromNodeId: 'caller', referenceName: 'Svc::run', referenceKind: 'calls',
+        line: 2, column: 0, filePath: 'c/main.cpp', language: 'cpp',
+      };
+      expect(matchByQualifiedName(ref, ctx)).toBeNull();
+    });
+
+    it('matchMethodCall needs two shared receiver words, not one word plus the language bonus', () => {
+      // `orderManager` shares only `Order` with `Order::finalize`; the same-language
+      // bonus must not lift one shared word over the two-word bar.
+      const order = methodNode('m:order', 'order.ts', 'Order::finalize', 'finalize', 'typescript');
+      const ledger = methodNode('m:ledger', 'ledger.ts', 'Ledger::finalize', 'finalize', 'typescript');
+      const ctx: ResolutionContext = {
+        getNodesInFile: () => [],
+        getNodesByName: (name) => (name === 'finalize' ? [order, ledger] : []),
+        getNodesByQualifiedName: () => [],
+        getNodesByKind: () => [],
+        fileExists: () => false,
+        readFile: () => null,
+        getProjectRoot: () => '',
+        getAllFiles: () => [],
+      };
+      const ref: UnresolvedRef = {
+        fromNodeId: 'caller', referenceName: 'orderManager.finalize', referenceKind: 'calls',
+        line: 2, column: 0, filePath: 'caller.ts', language: 'typescript',
+      };
+      expect(matchMethodCall(ref, ctx)).toBeNull();
+    });
+
     it('resolves a static/class-receiver call to the class in the caller\'s file (#1079)', async () => {
       // `Logger.log()` — the receiver is the class NAME, so this routes through
       // the class-name-receiver strategy (not the C++ instance path). It was

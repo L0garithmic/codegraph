@@ -16,10 +16,12 @@ export class LRUCache<K, V> {
   private readonly store = new Map<K, V>();
 
   constructor(max: number) {
-    if (!Number.isFinite(max) || max <= 0) {
-      throw new Error(`LRUCache max must be a positive finite number, got ${max}`);
+    // Check the capacity that is actually stored: 0.5 is positive but floors to 0.
+    const floored = Math.floor(max);
+    if (!Number.isFinite(floored) || floored < 1) {
+      throw new Error(`LRUCache max must be a finite number of at least 1, got ${max}`);
     }
-    this.max = Math.floor(max);
+    this.max = floored;
   }
 
   get size(): number {

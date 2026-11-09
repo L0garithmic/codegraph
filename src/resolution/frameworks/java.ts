@@ -67,10 +67,12 @@ export const springResolver: FrameworkResolver = {
       const canonPrefix = canonicalConfigKey(prefix);
       // Prefer an exact prefix match (one node = the prefix subtree). Without
       // node-level subtree representation we map to the closest matching key.
-      const candidates = context.getNodesByKind('constant').filter(
-        (n) => (n.language === 'yaml' || n.language === 'properties')
-          && canonicalConfigKey(n.qualifiedName).startsWith(canonPrefix),
-      );
+      // A dotted segment boundary: `app.cache` owns `app.cache` and `app.cache.*`, never `app.cacheable`.
+      const candidates = context.getNodesByKind('constant').filter((n) => {
+        if (n.language !== 'yaml' && n.language !== 'properties') return false;
+        const key = canonicalConfigKey(n.qualifiedName);
+        return key === canonPrefix || key.startsWith(canonPrefix + '.');
+      });
       if (candidates.length === 0) return null;
       // Pick the SHORTEST canonical name — it's the closest binding point
       // (`app.cache` over `app.cache.name.user-token` for prefix=`app.cache`).
@@ -229,8 +231,20 @@ export const springResolver: FrameworkResolver = {
     // `class`). Joined onto each method's path — and, crucially, NOT treated as a
     // route itself (the old regex did, creating one bogus class route and missing
     // every BARE method mapping like `@PostMapping` with the path on the class).
-    const cls = /@RequestMapping\s*\(([^)]*)\)\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:public\s+|final\s+|abstract\s+|open\s+|data\s+|sealed\s+)*class\b/.exec(safe);
-    const classPrefixes = cls ? parseMappingPaths(cls[1]!, consts) : [''];
+    // Each mapped class starts a new prefix: a method takes the prefix of the nearest
+    // mapped class declared above it, so two controllers in one file keep their own.
+    const classHeaders: Array<{ index: number; prefixes: string[] }> = [];
+    for (const c of safe.matchAll(/@RequestMapping\s*\(([^)]*)\)\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:public\s+|final\s+|abstract\s+|open\s+|data\s+|sealed\s+)*class\b/g)) {
+      classHeaders.push({ index: c.index ?? 0, prefixes: parseMappingPaths(c[1]!, consts) });
+    }
+    const classPrefixesAt = (index: number): string[] => {
+      let prefixes = [''];
+      for (const h of classHeaders) {
+        if (h.index > index) break;
+        prefixes = h.prefixes;
+      }
+      return prefixes;
+    };
 
     const VERB: Record<string, string> = {
       GetMapping: 'GET', PostMapping: 'POST', PutMapping: 'PUT', PatchMapping: 'PATCH', DeleteMapping: 'DELETE',
@@ -246,7 +260,7 @@ export const springResolver: FrameworkResolver = {
       // Java puts the return type before the name). Bounded so we don't grab a far one.
       const tail = safe.slice(match.index + match[0].length, match.index + match[0].length + 600);
       const methodMatch = tail.match(/\bfun\s+(\w+)\s*\(|\b(?:public|private|protected)\s+[^;{=]*?\s+(\w+)\s*\(/);
-      for (const routePath of classPrefixes.flatMap(prefix => paths.map(sub => joinPath(prefix, sub)))) {
+      for (const routePath of classPrefixesAt(match.index).flatMap(prefix => paths.map(sub => joinPath(prefix, sub)))) {
         const routeNode: Node = {
           id: `route:${filePath}:${line}:${method}:${routePath}`,
           kind: 'route',
@@ -290,7 +304,7 @@ export const springResolver: FrameworkResolver = {
       const method = verbM ? verbM[1]!.toUpperCase() : 'ANY';
       const paths = parseMappingPaths(args, consts);
       const line = safe.slice(0, match.index).split('\n').length;
-      for (const routePath of classPrefixes.flatMap(prefix => paths.map(sub => joinPath(prefix, sub)))) {
+      for (const routePath of classPrefixesAt(match.index).flatMap(prefix => paths.map(sub => joinPath(prefix, sub)))) {
         const routeNode: Node = {
           id: `route:${filePath}:${line}:${method}:${routePath}`,
           kind: 'route',

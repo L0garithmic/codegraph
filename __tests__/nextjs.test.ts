@@ -104,6 +104,36 @@ describe('nextjs: extract', () => {
 // End to end: a small App Router site
 // =============================================================================
 
+describe('nextjs: regressions', () => {
+  it('extracts a handler exported through an export list as GET', () => {
+    const src = `async function handler(req: Request) { return new Response('ok'); }
+export { handler as GET };`;
+    const { nodes, references } = nextjsResolver.extract!('app/api/x/route.ts', src);
+    expect(nodes.map(n => n.name)).toEqual(['GET /api/x']);
+    expect(references.map(r => r.referenceName)).toEqual(['handler']);
+  });
+
+  it('resolves a navigation to the caller\'s own app when two apps serve the same path', () => {
+    const page = (id: string, filePath: string): Node => ({
+      id, kind: 'route', name: '/login', qualifiedName: `${filePath}::route:/login`, filePath,
+      startLine: 1, endLine: 1, startColumn: 0, endColumn: 0, language: 'tsx', updatedAt: 0,
+    });
+    const routes = [page('web-login', 'apps/web/app/login/page.tsx'), page('admin-login', 'apps/admin/app/login/page.tsx')];
+    const lines = ["router.push('/login');"];
+    const ctx = {
+      getNodesByKind: (kind: string) => (kind === 'route' ? routes : []),
+      getFileLines: () => lines,
+      readFile: () => lines.join('\n'),
+      getNodeById: () => undefined,
+    } as any;
+    const ref = {
+      referenceName: 'router.push', referenceKind: 'calls', language: 'tsx', fromNodeId: 'f',
+      line: 1, column: 0, filePath: 'apps/web/app/home/page.tsx',
+    } as any;
+    expect(nextjsResolver.resolve!(ref, ctx)?.targetNodeId).toBe('web-login');
+  });
+});
+
 describe('nextjs: end to end', () => {
   let tmpDir: string;
   let cg: CodeGraph;

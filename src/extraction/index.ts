@@ -1859,7 +1859,8 @@ export class ExtractionOrchestrator {
         const target =
           relativePath === '.' || relativePath === ''
             ? rootDir
-            : path.join(rootDir, relativePath);
+            : validatePathWithinRoot(rootDir, relativePath);
+        if (!target) return [];
         try {
           return fs
             .readdirSync(target, { withFileTypes: true })
@@ -2924,22 +2925,24 @@ export class ExtractionOrchestrator {
   /**
    * Re-attach cross-file incoming edges snapshotted before a re-index delete
    * (#899): re-resolve each edge's target to the re-indexed node's new id by
-   * (kind, name); targets that vanished are resurrected as their original
+   * (kind, qualified name); targets that vanished are resurrected as their original
    * unresolved ref (#1240's removal-side counterpart) when the edge carries
    * its refName stamp.
    */
   private reattachCrossFileEdges(
-    crossFileIncomingEdges: Array<Edge & { targetKind: string; targetName: string; sourceFilePath: string; sourceLanguage: Language }>,
+    crossFileIncomingEdges: Array<Edge & { targetKind: string; targetName: string; targetQualifiedName: string; sourceFilePath: string; sourceLanguage: Language }>,
     validNodes: Node[]
   ): void {
-    const newNodesByKindName = new Map<string, string>();
+    // Keyed by qualified name: two same-named methods in one file (different
+    // classes) must not collapse onto the last one.
+    const newNodesByKindQName = new Map<string, string>();
     for (const n of validNodes) {
-      newNodesByKindName.set(`${n.kind}\0${n.name}`, n.id);
+      newNodesByKindQName.set(`${n.kind}\0${n.qualifiedName}`, n.id);
     }
     const reinserted: Edge[] = [];
     const resurrected: UnresolvedReference[] = [];
     for (const e of crossFileIncomingEdges) {
-      const newTargetId = newNodesByKindName.get(`${e.targetKind}\0${e.targetName}`);
+      const newTargetId = newNodesByKindQName.get(`${e.targetKind}\0${e.targetQualifiedName}`);
       if (newTargetId) {
         reinserted.push({ source: e.source, target: newTargetId, kind: e.kind, metadata: e.metadata, line: e.line, column: e.column, provenance: e.provenance });
       } else {

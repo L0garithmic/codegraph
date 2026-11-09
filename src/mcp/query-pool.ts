@@ -117,12 +117,15 @@ export function resolvePoolSize(envVal: string | undefined, cpuCount: number): n
   return Math.max(1, Math.min(cpuCount - 1, MAX_POOL_SIZE));
 }
 
-function resolveBusyTimeoutMs(): number {
+/** Node's largest timer delay; a larger setTimeout delay fires at once (~1 ms). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+export function resolveBusyTimeoutMs(): number {
   const raw = process.env.CODEGRAPH_QUERY_BUSY_TIMEOUT_MS;
   if (raw === undefined || raw === '') return DEFAULT_BUSY_TIMEOUT_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1000) return DEFAULT_BUSY_TIMEOUT_MS;
-  return Math.floor(n);
+  return Math.min(Math.floor(n), MAX_TIMER_DELAY_MS);
 }
 
 /** Success-shaped overload guidance (NEVER isError — see the abandonment rule). */
@@ -132,9 +135,8 @@ function busyGuidance(waitedMs: number): ToolResult {
     content: [{
       type: 'text',
       text:
-        `CodeGraph is busy serving other concurrent requests right now (this call waited ${secs}s in the queue). ` +
-        `This is NOT an error and the index is fine — wait a few seconds and retry this exact call; it will return normally. ` +
-        `If you can't wait, use your built-in tools for just this one step.`,
+        `CodeGraph is still busy with this call: it did not finish within ${secs}s, so it returned early, and it may still be running. ` +
+        `This is not a failure report. Retry this exact call once; if it is busy again, use your built-in tools for just this one step.`,
     }],
   };
 }

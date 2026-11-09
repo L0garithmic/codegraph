@@ -47,6 +47,16 @@ export const SERVER_INFO = {
  * instructions equality must set `CODEGRAPH_NO_UPDATE_CHECK=1` in the spawn
  * env or it will fail only in the weeks after a release ships.
  */
+/**
+ * The initialize `instructions` for a session searching from `searchFrom`: the
+ * project playbook when a root is indexed, else the per-project variant. The
+ * session and the stdio proxy both answer `initialize`, so both call this.
+ */
+export function initializeInstructionsFor(searchFrom: string): string {
+  const indexed = resolveServerRoot(searchFrom).root !== null;
+  return initializeInstructions(indexed ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_ROOT_INDEX);
+}
+
 export function initializeInstructions(base: string, notice: string | null = getUpdateNotice()): string {
   if (!notice) return base;
   return (
@@ -246,14 +256,12 @@ export class MCPSession {
     // sub-projects indexed) and never surfaced the tools after a mid-session
     // `codegraph init`. When no explicit path is known yet (roots/list dance
     // pending), cwd is the best predictor of where the default will resolve.
-    const indexed = resolveServerRoot(explicitPath ?? process.cwd()).root !== null;
-
     // Respond to the handshake BEFORE doing any heavy init — see issue #172.
     this.transport.sendResult(request.id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: {} },
       serverInfo: SERVER_INFO,
-      instructions: initializeInstructions(indexed ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_ROOT_INDEX),
+      instructions: initializeInstructionsFor(explicitPath ?? process.cwd()),
     });
 
     if (explicitPath) {

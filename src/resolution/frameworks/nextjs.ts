@@ -118,9 +118,14 @@ function languageForFile(filePath: string): Language {
 // Route table — this framework's pages, matched the Expo Router way
 // =============================================================================
 
-interface NextTable extends RouteTable {
-  /** The directories Next apps live in — a navigation call is only read from under one. */
-  roots: string[];
+interface NextTable {
+  /** Identity of the node array the table was built from — rebuild when it changes. */
+  source: readonly Node[];
+  /**
+   * One route table per Next app, keyed by the app's root directory (`apps/web/`,
+   * or `''` for an app at the top). Two apps serving `/login` each keep their own.
+   */
+  apps: Map<string, RouteTable>;
 }
 
 const tables = new WeakMap<ResolutionContext, NextTable>();
@@ -129,19 +134,32 @@ export function nextRouteTable(context: ResolutionContext): NextTable {
   const all = context.getNodesByKind('route');
   const cached = tables.get(context);
   if (cached && cached.source === all) return cached;
-  const exact = new Map<string, Node>();
-  const dynamic: RouteTable['dynamic'] = [];
-  const roots = new Set<string>();
+  const byRoot = new Map<string, { exact: Map<string, Node>; dynamic: RouteTable['dynamic'] }>();
   for (const node of all) {
     const file = nextRouteForFile(node.filePath);
     if (!file || file.kind !== 'page' || file.path !== node.name) continue;
-    exact.set(node.name, node);
-    if (node.name.includes(':')) dynamic.push({ node, segs: node.name.split('/').slice(1) });
-    roots.add(file.root);
+    let app = byRoot.get(file.root);
+    if (!app) {
+      app = { exact: new Map<string, Node>(), dynamic: [] };
+      byRoot.set(file.root, app);
+    }
+    app.exact.set(node.name, node);
+    if (node.name.includes(':')) app.dynamic.push({ node, segs: node.name.split('/').slice(1) });
   }
-  const table: NextTable = { source: all, exact, dynamic, roots: [...roots] };
+  const apps = new Map<string, RouteTable>();
+  for (const [root, app] of byRoot) apps.set(root, { source: all, exact: app.exact, dynamic: app.dynamic });
+  const table: NextTable = { source: all, apps };
   tables.set(context, table);
   return table;
+}
+
+/** The route table of the app a file belongs to: the deepest app root that contains it. */
+export function nextAppTable(table: NextTable, filePath: string): RouteTable | null {
+  let best: string | null = null;
+  for (const root of table.apps.keys()) {
+    if (filePath.startsWith(root) && (best === null || root.length > best.length)) best = root;
+  }
+  return best === null ? null : table.apps.get(best)!;
 }
 
 /** `/users/${…}?tab=x` → `['users', '*']`; an absolute URL keeps its path; a relative href is nothing. */
@@ -246,30 +264,45 @@ export const nextjsResolver: FrameworkResolver = {
 
     if (file.kind === 'handler') {
       // `export async function GET(req) {…}` / `export const POST = …` — one route per method.
-      const seen = new Set<string>();
+      // `export { handler as GET }` / `export { GET } from './x'` route the named handler.
+      const hits: Array<{ method: string; target: string; index: number; length: number }> = [];
       const decl = new RegExp(`\\bexport\\s+(?:async\\s+)?function\\s+(${HTTP_EXPORTS})\\b|\\bexport\\s+(?:const|let)\\s+(${HTTP_EXPORTS})\\s*=`, 'g');
       let m: RegExpExecArray | null;
       while ((m = decl.exec(stripped)) !== null) {
         const method = (m[1] ?? m[2])!;
-        if (seen.has(method)) continue;
-        seen.add(method);
-        const line = lineOf(m.index);
+        hits.push({ method, target: method, index: m.index, length: m[0].length });
+      }
+      const exportList = /\bexport\s*\{([^}]*)\}/g;
+      const httpName = new RegExp(`^(?:${HTTP_EXPORTS})$`);
+      while ((m = exportList.exec(stripped)) !== null) {
+        for (const spec of m[1]!.split(',')) {
+          const sm = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(spec);
+          if (!sm || !httpName.test(sm[2] ?? sm[1]!)) continue;
+          hits.push({ method: sm[2] ?? sm[1]!, target: sm[1]!, index: m.index, length: m[0].length });
+        }
+      }
+      hits.sort((a, b) => a.index - b.index);
+      const seen = new Set<string>();
+      for (const hit of hits) {
+        if (seen.has(hit.method)) continue;
+        seen.add(hit.method);
+        const line = lineOf(hit.index);
         const node: Node = {
-          id: `route:${filePath}:${line}:${method}:${file.path}`,
+          id: `route:${filePath}:${line}:${hit.method}:${file.path}`,
           kind: 'route',
-          name: `${method} ${file.path}`,
-          qualifiedName: `${filePath}::${method}:${file.path}`,
+          name: `${hit.method} ${file.path}`,
+          qualifiedName: `${filePath}::${hit.method}:${file.path}`,
           filePath,
           startLine: line,
           endLine: line,
           startColumn: 0,
-          endColumn: m[0].length,
+          endColumn: hit.length,
           language,
           isExported: true,
           updatedAt: now,
         };
         nodes.push(node);
-        references.push({ fromNodeId: node.id, referenceName: method, referenceKind: 'references', line, column: 0, filePath, language, candidates: [method] });
+        references.push({ fromNodeId: node.id, referenceName: hit.target, referenceKind: 'references', line, column: 0, filePath, language, candidates: [hit.target] });
       }
       return { nodes, references };
     }
@@ -312,8 +345,9 @@ export const nextjsResolver: FrameworkResolver = {
     const verb = nextNavVerb(ref.referenceName);
     if (!verb) return null;
     if (!ROUTE_LANGUAGES.includes(ref.language)) return null;
-    const table = nextRouteTable(context);
-    if (table.exact.size === 0 || !table.roots.some((root) => ref.filePath.startsWith(root))) return null;
+    // A navigation call resolves only against the app it is written in.
+    const app = nextAppTable(nextRouteTable(context), ref.filePath);
+    if (!app) return null;
     const callee = ref.referenceName.slice(ref.referenceName.lastIndexOf('.') + 1);
     const lines = context.getFileLines?.(ref.filePath) ?? context.readFile(ref.filePath)?.split(/\r?\n/) ?? null;
     if (!lines) return null;
@@ -331,7 +365,7 @@ export const nextjsResolver: FrameworkResolver = {
     if (!href) return null;
     // Every arm of a conditional destination is somewhere this call goes; the
     // first is this reference's resolution and the rest ride as `alsoTargets`.
-    const targets = destinationsForHref(href, table);
+    const targets = destinationsForHref(href, app);
     const target = targets[0];
     if (!target) return null;
     return {

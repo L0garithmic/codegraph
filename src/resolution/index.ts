@@ -38,7 +38,7 @@ import { logDebug } from '../errors';
 import { lexicalPathWithinRoot } from '../utils';
 import type { ReExport } from './types';
 import { LRUCache } from './lru-cache';
-import { JS_BUILT_INS } from './js-builtins';
+import { JS_BUILT_INS, isJsBuiltinMemberCall } from './js-builtins';
 
 /** Node kinds that can declare supertypes (extends/implements). */
 const SUPERTYPE_BEARING_KINDS = new Set<Node['kind']>([
@@ -203,6 +203,18 @@ const CPP_BUILT_INS = new Set([
   'make_unique', 'make_shared', 'make_pair',
   'move', 'forward', 'swap',
 ]);
+
+/**
+ * The name a reference is checked under in the symbol-name index. Language
+ * rewrites live here, one place: ArkTS chained attributes (`.titleStyle`) are
+ * indexed under the bare name, and Erlang refs carry the call-site arity
+ * (`f/1`, `mod::f/2` — #1610) that the name index does not store.
+ */
+export function existenceNameFor(ref: Pick<UnresolvedRef, 'language' | 'referenceName'>): string {
+  if (ref.language === 'arkts' && ref.referenceName.startsWith('.')) return ref.referenceName.slice(1);
+  if (ref.language === 'erlang') return ref.referenceName.replace(/\/\d{1,3}$/, '');
+  return ref.referenceName;
+}
 
 /**
  * Reference Resolver
@@ -956,13 +968,7 @@ export class ReferenceResolver {
     // indexed under the bare name, so the existence check strips the dot.
     // Nix static path imports (`import ./x.nix`) name a FILE, not a symbol —
     // they bypass the symbol-existence check and resolve via resolveViaImport.
-    let existenceName =
-      ref.language === 'arkts' && ref.referenceName.startsWith('.')
-        ? ref.referenceName.slice(1)
-        : ref.referenceName;
-    // Erlang refs carry the call-site arity (`f/1`, `mod::f/2` — #1610); the
-    // name index stores bare names, so existence is checked arity-less.
-    if (ref.language === 'erlang') existenceName = existenceName.replace(/\/\d{1,3}$/, '');
+    const existenceName = existenceNameFor(ref);
     const tPre = this.profileStages ? process.hrtime.bigint() : 0n;
     const preFilterPass =
       isNixPathImportRef(ref) ||
@@ -2234,7 +2240,7 @@ export class ReferenceResolver {
     }
 
     // Common JS/TS library calls (console.log, Math.floor, JSON.parse)
-    if (isJsTs && (name.startsWith('console.') || name.startsWith('Math.') || name.startsWith('JSON.'))) {
+    if (isJsTs && isJsBuiltinMemberCall(name)) {
       return true;
     }
 

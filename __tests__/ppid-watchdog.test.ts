@@ -144,6 +144,9 @@ describe('parsePpidPollMs', () => {
     expect(parsePpidPollMs('abc')).toBe(DEFAULT_PPID_POLL_MS);
     expect(parsePpidPollMs('-5')).toBe(DEFAULT_PPID_POLL_MS);
   });
+  it('treats a whitespace-only value as the default, not as 0 (which disables the watchdog)', () => {
+    expect(parsePpidPollMs(' ')).toBe(DEFAULT_PPID_POLL_MS);
+  });
   it('honours a positive override and floors it', () => {
     expect(parsePpidPollMs('200')).toBe(200);
     expect(parsePpidPollMs('150.9')).toBe(150);

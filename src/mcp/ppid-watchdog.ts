@@ -73,7 +73,8 @@ export const DEFAULT_PPID_POLL_MS = 5000;
  * default.
  */
 export function parsePpidPollMs(raw: string | undefined): number {
-  if (raw === undefined || raw === '') return DEFAULT_PPID_POLL_MS;
+  // Number(' ') is 0, which would disable the watchdog: a blank value is the default.
+  if (raw === undefined || raw.trim() === '') return DEFAULT_PPID_POLL_MS;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return DEFAULT_PPID_POLL_MS;
   if (parsed < 0) return DEFAULT_PPID_POLL_MS;

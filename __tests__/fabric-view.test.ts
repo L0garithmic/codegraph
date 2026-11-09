@@ -141,4 +141,18 @@ export function App() {
     expect(jsxRows[0].caller).toBe('App');
     // The full flow: App (TSX) → MyView (fabric-component) → MyViewView (ObjC native class)
   });
+
+  it('keeps function-valued NativeProps properties (onTap?: () => void)', () => {
+    const source = `
+import { codegenNativeComponent } from 'react-native';
+export interface NativeProps {
+  onTap?: () => void;
+  caption?: string;
+}
+export default codegenNativeComponent<NativeProps>('MyView', {});
+`;
+    const result = fabricViewResolver.extract?.('src/MyViewNativeComponent.ts', source);
+    const propNames = result!.nodes.filter((n) => n.kind === 'property').map((n) => n.name).sort();
+    expect(propNames).toEqual(['caption', 'onTap']);
+  });
 });

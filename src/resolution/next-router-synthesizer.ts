@@ -27,7 +27,7 @@ import type { MaybeYield } from './cooperative-yield';
 import { stripCommentsForRegex } from './strip-comments';
 import { isTestPath } from '../search/query-utils';
 import { readStringAt, toHref } from './frameworks/expo-router';
-import { nextRouteTable, destinationsForHref } from './frameworks/nextjs';
+import { nextRouteTable, nextAppTable, destinationsForHref } from './frameworks/nextjs';
 import { enclosingFn, makeLineAt } from './synth-utils';
 
 const JSX_FILE = /\.(?:[cm]?[jt]sx?|mdx)$/;
@@ -40,14 +40,15 @@ const MAX_LINKS_PER_COMPONENT = 24;
 
 export async function nextLinkEdges(ctx: ResolutionContext, onYield: MaybeYield): Promise<Edge[]> {
   const table = nextRouteTable(ctx);
-  if (table.exact.size === 0) return [];
+  if (table.apps.size === 0) return [];
   const edges: Edge[] = [];
   const seen = new Set<string>();
   const perComponent = new Map<string, number>();
   let scanned = 0;
   for (const file of ctx.getAllFiles()) {
     if (!JSX_FILE.test(file) || isTestPath(file)) continue;
-    if (!table.roots.some((root) => file.startsWith(root))) continue;
+    const app = nextAppTable(table, file);
+    if (!app) continue;
     if ((++scanned & 63) === 0) await onYield();
     const source = ctx.readFile(file);
     if (!source || !source.includes('href')) continue;
@@ -82,7 +83,7 @@ export async function nextLinkEdges(ctx: ResolutionContext, onYield: MaybeYield)
       if (!component) continue;
       // A destination written as a choice names one route per arm, and the
       // user reaches every one of them — each is drawn.
-      for (const { node: page, href: arm } of destinationsForHref(href, table)) {
+      for (const { node: page, href: arm } of destinationsForHref(href, app)) {
         const key = `${component.id}>${page.id}`;
         if (seen.has(key)) continue;
         const count = (perComponent.get(component.id) ?? 0) + 1;

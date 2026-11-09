@@ -7,6 +7,19 @@ export const JS_BUILT_INS = new Set([
   'fetch', 'require', 'module', 'exports', '__dirname', '__filename',
 ]);
 
+/**
+ * Globals whose member calls (`console.log`, `Math.floor`, `JSON.parse`) are
+ * library calls, never project code. Owned here so the resolver's member-call
+ * check and JS_BUILT_INS cannot drift apart.
+ */
+export const JS_BUILTIN_MEMBER_ROOTS: ReadonlySet<string> = new Set(['console', 'Math', 'JSON']);
+
+/** True for a dotted reference rooted at one of {@link JS_BUILTIN_MEMBER_ROOTS}. */
+export function isJsBuiltinMemberCall(name: string): boolean {
+  const dot = name.indexOf('.');
+  return dot > 0 && JS_BUILTIN_MEMBER_ROOTS.has(name.slice(0, dot));
+}
+
 /** Method names that require receiver evidence before linking to project code. */
 export const JS_BUILTIN_METHODS = new Set([
   // Array / typed arrays and collections.

@@ -123,11 +123,9 @@ function extractPropNames(body: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = regex.exec(body)) !== null) {
     const name = m[1]!;
-    // Exclude any line that immediately turns into a function-shape (e.g.
-    // `onTap?: () => void` is fine — it's a prop, not a method body —
-    // but a literal `name(arg: T): R` is a method declaration).
-    const after = body.slice(m.index + m[0].length, m.index + m[0].length + 80);
-    if (/^\s*\(/.test(after)) continue; // method-shape, skip
+    // The colon already makes this a property: `onTap?: () => void` is a prop
+    // whose value is a function type, and a method declaration `name(...)`
+    // never matches the regex above.
     props.push(name);
   }
   return props;

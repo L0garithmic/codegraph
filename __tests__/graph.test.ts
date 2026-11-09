@@ -549,6 +549,18 @@ describe('Traversal edge-completeness & limits (#1086–#1090)', () => {
     expect(sub.nodes.has('B')).toBe(true);
   });
 
+  it('traverseDFS keeps every parallel edge to the same target (#1090)', () => {
+    // A reaches B via both `calls` and `references`: the first edge recurses into B
+    // and marks it visited, so the second must still be recorded.
+    const edges: Edge[] = [
+      { source: 'A', target: 'B', kind: 'calls', line: 1 },
+      { source: 'A', target: 'B', kind: 'references', line: 2 },
+    ];
+    const sub = tGraph([tNode('A'), tNode('B')], edges).traverseDFS('A', { direction: 'outgoing' });
+    const ab = sub.edges.filter((e) => e.source === 'A' && e.target === 'B');
+    expect(ab.map((e) => e.kind).sort()).toEqual(['calls', 'references']);
+  });
+
   it('traverseBFS keeps two same-kind edges on different lines (#1090)', () => {
     const edges: Edge[] = [
       { source: 'A', target: 'B', kind: 'calls', line: 3 },

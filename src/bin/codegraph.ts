@@ -47,6 +47,7 @@ import { detectWorktreeIndexMismatch, worktreeMismatchWarning } from '../sync/wo
 import { createShimmerProgress } from '../ui/shimmer-progress';
 import { getGlyphs } from '../ui/glyphs';
 import { ansiColorsEnabled } from '../ui/color';
+import { filterFilesUnderDir, parseWholeNumber } from './option-parsing';
 
 import { buildNode25BlockBanner, buildNodeTooOldBanner, MIN_NODE_MAJOR } from './node-version-check';
 import { installFatalHandlers } from './fatal-handler';
@@ -1382,7 +1383,7 @@ program
     }
     let maxNodes: number | undefined;
     if (options.maxNodes !== undefined) {
-      maxNodes = parseInt(options.maxNodes, 10);
+      maxNodes = parseWholeNumber(options.maxNodes);
       if (Number.isNaN(maxNodes) || maxNodes < 1) {
         error(`--max-nodes expects a positive integer, got "${options.maxNodes}".`);
         process.exit(1);
@@ -1705,7 +1706,7 @@ program
       // Filter by path prefix
       if (options.filter) {
         const filter = options.filter;
-        files = files.filter(f => f.path.startsWith(filter) || f.path.startsWith('./' + filter));
+        files = filterFilesUnderDir(files, filter);
       }
 
       // Filter by glob pattern
@@ -2380,7 +2381,12 @@ program
       const { default: CodeGraph } = await loadCodeGraph();
       const cg = await CodeGraph.open(projectPath);
       try {
-        const depth = Math.min(Math.max(parseInt(options.depth || '2', 10), 1), 10);
+        const requestedDepth = parseWholeNumber(options.depth || '2');
+        if (Number.isNaN(requestedDepth)) {
+          error(`--depth expects a whole number, got "${options.depth}".`);
+          process.exit(1);
+        }
+        const depth = Math.min(Math.max(requestedDepth, 1), 10);
         const { nodes: targets } = lookupSymbolNodes(cg, symbol);
         if (targets.length === 0) {
           info(formatSymbolNotFound(symbol, cg.searchNodes(symbol, { limit: 5 }).map((m) => m.node.name)));

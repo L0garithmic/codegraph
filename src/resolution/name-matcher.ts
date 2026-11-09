@@ -436,9 +436,7 @@ export function matchFunctionRef(
   // languages keep method targets: C# method groups, Swift/Dart
   // implicit-self, Java/Kotlin method references.
   const bareFnOnly =
-    ref.language === 'typescript' || ref.language === 'tsx' ||
-    ref.language === 'javascript' || ref.language === 'jsx' ||
-    ref.language === 'arkts' ||
+    ESM_FAMILY.has(ref.language) ||
     ref.language === 'cpp' || ref.language === 'python' ||
     ref.language === 'php';
 
@@ -609,8 +607,11 @@ function isLexicallyReachable(
   );
 }
 
-/** Languages whose module boundary is `import`/`export` (or CommonJS). */
-const ESM_FAMILY = new Set<string>(['typescript', 'tsx', 'javascript', 'jsx', 'arkts']);
+/** The JS/TS dialects. A new dialect is added here once, not in each check. */
+const JS_FAMILY = new Set<string>(['typescript', 'tsx', 'javascript', 'jsx']);
+
+/** Languages whose module boundary is `import`/`export` (or CommonJS): the JS/TS dialects plus ArkTS. */
+const ESM_FAMILY = new Set<string>([...JS_FAMILY, 'arkts']);
 
 /**
  * A line-initial `import` statement — the marker that a JS/TS file is a MODULE
@@ -861,8 +862,6 @@ export function isVisibleAcrossFiles(candidate: Node, ref: UnresolvedRef, contex
   // rejection here cannot fall through to a promoted runner-up.
   return isCrossFileReachable(candidate, ref, context);
 }
-
-const JS_FAMILY = new Set<string>(['typescript', 'tsx', 'javascript', 'jsx']);
 
 /**
  * Whether a JS/TS `calls` ref is a RECEIVER-LESS call — `serialize(x)`, not
@@ -1145,7 +1144,11 @@ export function matchByQualifiedName(
   if (lastName) {
     const partialCandidates = keepForRef(context.getNodesByName(lastName))
       .filter((candidate) => candidate.qualifiedName.endsWith(ref.referenceName));
-    const chosen = preferCallSiteFile(partialCandidates, ref.filePath)[0];
+    // A first-indexed pick among several cross-file suffix matches is the #1079
+    // collapse, so take a candidate only from the call site's file or as the sole survivor.
+    const ordered = preferCallSiteFile(partialCandidates, ref.filePath);
+    const chosen =
+      ordered[0]?.filePath === ref.filePath || partialCandidates.length === 1 ? ordered[0] : undefined;
     if (chosen) {
       return {
         original: ref,
@@ -3027,24 +3030,28 @@ export function matchMethodCall(
       const receiverWords = splitCamelCase(objectOrClass!);
       let bestMatch: typeof targetMethods[0] | undefined;
       let bestScore = 0;
+      let bestOverlap = 0;
 
       // Same-file candidates first, so a score tie (`score > bestScore` keeps
       // the first seen) resolves to the call site's own file rather than the
       // first-indexed duplicate (#1079).
       for (const method of preferCallSiteFile(targetMethods, ref.filePath)) {
         const classWords = splitCamelCase(method.qualifiedName);
-        let score = receiverWords.filter(w =>
+        const overlap = receiverWords.filter(w =>
           classWords.some(cw => cw.toLowerCase() === w.toLowerCase())
         ).length;
-        // Bonus for same language
+        // Same-language bonus ranks candidates; it never counts toward the bar.
+        let score = overlap;
         if (method.language === ref.language) score += 1;
         if (score > bestScore) {
           bestScore = score;
+          bestOverlap = overlap;
           bestMatch = method;
         }
       }
 
-      if (bestMatch && bestScore >= 2) {
+      // Two shared receiver words are required, not one word plus the bonus.
+      if (bestMatch && bestOverlap >= 2) {
         return {
           original: ref,
           targetNodeId: bestMatch.id,

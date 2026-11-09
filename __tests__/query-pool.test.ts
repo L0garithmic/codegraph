@@ -16,7 +16,7 @@ import { Worker } from 'worker_threads';
 import { CodeGraph } from '../src';
 import { ExploreSessionState, EXPLORE_EMISSION_KEY } from '../src/mcp/explore-session-state';
 import type { MCPEngine } from '../src/mcp/engine';
-import { QueryPool, resolvePoolSize, type PoolWorker } from '../src/mcp/query-pool';
+import { QueryPool, resolvePoolSize, resolveBusyTimeoutMs, type PoolWorker } from '../src/mcp/query-pool';
 import type { ToolResult } from '../src/mcp/tools';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -170,6 +170,28 @@ describe('QueryPool', () => {
     expect(res.isError).toBeFalsy();            // NOT an error (abandonment rule)
     expect(res.content[0].text).toMatch(/busy|retry/i);
     await pool.destroy();
+  });
+
+  it('early-return guidance does not claim a queue wait or a healthy index', async () => {
+    // A call that is still running (not queued) gets this text too, so it must
+    // not say it waited in a queue, that the index is fine, or that a retry
+    // will return normally.
+    const pool = new QueryPool({ root: '/x', size: 1, softTimeoutMs: 60, createWorker: () => new FakeWorker(() => ({ hang: true })) });
+    const res = await pool.run('codegraph_explore', { query: 'q' });
+    const text = res.content[0].text;
+    expect(text).not.toMatch(/index is fine|in the queue|will return normally|NOT an error/);
+    await pool.destroy();
+  });
+
+  it('a busy timeout above Node\'s timer limit is clamped, not overflowed to ~1ms', () => {
+    const prev = process.env.CODEGRAPH_QUERY_BUSY_TIMEOUT_MS;
+    try {
+      process.env.CODEGRAPH_QUERY_BUSY_TIMEOUT_MS = '3000000000';
+      expect(resolveBusyTimeoutMs()).toBe(2_147_483_647);
+    } finally {
+      if (prev === undefined) delete process.env.CODEGRAPH_QUERY_BUSY_TIMEOUT_MS;
+      else process.env.CODEGRAPH_QUERY_BUSY_TIMEOUT_MS = prev;
+    }
   });
 
   it('destroy settles outstanding calls instead of hanging', async () => {

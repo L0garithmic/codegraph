@@ -393,24 +393,8 @@ export interface WireRoutes {
 
 /* ---------------------------------------------------------- entry points -- */
 
-export interface WireEntryRoute {
-  /** The route node's name, verbatim: "POST /v1/users/{id}". */
-  url: string;
-  /** The verb, when the name leads with one. Null for a file-routed page. */
-  method: string | null;
-  /** The URL without the verb — the same string as `url` when there is none. */
-  path: string;
-  handler: string;
-  handlerKind: string;
-  /** Where the request is SERVED. */
-  file: string;
-  line: number;
-  handlerId: string | null;
-  /** Where the URL is REGISTERED — the router file, which is how routes group. */
-  routeFile: string;
-  routeLine: number;
-  routeId: string;
-}
+/** The same URL-to-handler row as {@link WireRoute}: one contract, not a copy. */
+export type WireEntryRoute = WireRoute;
 
 export interface WireEntryFile extends WireNodeRef {
   /** Calls and instantiations made at the top level of the file. */

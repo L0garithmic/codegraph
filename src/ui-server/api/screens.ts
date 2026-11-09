@@ -488,6 +488,9 @@ async function attribute(
     if (parent.size + wanted.size > MAX_VISITED) truncated = true;
     const fetched = wanted.size === 0 ? new Map<string, Node>() : cg.getNodesByIds([...wanted]);
     for (const [, edges] of byTarget) {
+      // The cap must hold across target groups too: a `break` in the inner
+      // loop only leaves that group, so check here before adding more.
+      if (parent.size >= MAX_VISITED) break;
       if (edges.length > MAX_CALLERS_PER_NODE) continue;
       for (const e of edges) {
         if (parent.has(e.source)) continue;
