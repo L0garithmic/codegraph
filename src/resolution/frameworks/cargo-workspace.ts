@@ -83,7 +83,8 @@ function escapeRegExp(value: string): string {
 }
 
 function getArrayValue(section: string, key: string): string | null {
-  const keyRegex = new RegExp(`\\b${escapeRegExp(key)}\\b\\s*=`, 'm');
+  // Anchored to the line start: a bare `\b` also matches inside `default-members =`.
+  const keyRegex = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`, 'm');
   const keyMatch = keyRegex.exec(section);
   if (!keyMatch) return null;
 

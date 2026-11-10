@@ -2,7 +2,8 @@
  * Registry of all known agent targets.
  *
  * Adding a new target = create `targets/<id>.ts` exporting an
- * `AgentTarget`, then add it to the array below. Order here is the
+ * `AgentTarget`, add its id to `TARGET_IDS` in `types.ts` (the one list
+ * that `TargetId` is derived from), then add it to the array below. Order here is the
  * order they appear in the multiselect prompt, in `--target=all`,
  * and in `--print-config`'s help listing — keep it stable.
  */
@@ -75,8 +76,7 @@ export function resolveTargetFlag(value: string, loc: Location): AgentTarget[] {
   if (value === 'auto') {
     const detected = detectAll(loc).filter(({ detection }) => detection.installed);
     if (detected.length > 0) return detected.map(({ target }) => target);
-    const fallback = getTarget('claude');
-    return fallback ? [fallback] : [];
+    return [claudeTarget];
   }
 
   const ids = value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -84,13 +84,14 @@ export function resolveTargetFlag(value: string, loc: Location): AgentTarget[] {
   const unknown: string[] = [];
   for (const id of ids) {
     const t = getTarget(id);
-    if (t) resolved.push(t);
-    else unknown.push(id);
+    if (t) {
+      if (!resolved.includes(t)) resolved.push(t);
+    } else unknown.push(id);
   }
   if (unknown.length > 0) {
     const known = listTargetIds().join(', ');
     throw new Error(
-      `Unknown --target id(s): ${unknown.join(', ')}. Known: ${known}, plus 'auto' / 'all' / 'none'.`,
+      `Unknown --target id(s): ${unknown.join(', ')}. Known: ${known}. 'auto', 'all' and 'none' are only accepted as the whole value, not in a comma list.`,
     );
   }
   return resolved;

@@ -57,6 +57,9 @@ function extractPhpReturnType(node: SyntaxNode, source: string): string | undefi
   const nameNode = rt.type === 'named_type' ? (rt.namedChild(0) ?? rt) : rt;
   const text = getNodeText(nameNode, source).trim().replace(/^\\/, '');
   if (!text) return undefined;
+  // Reject unions/intersections BEFORE the namespace split: `A|Vendor\B` would
+  // otherwise reduce to `B` and pass the identifier check below.
+  if (/[|&]/.test(text)) return undefined;
   const last = text.split('\\').pop() ?? text;
   const lc = last.toLowerCase();
   if (lc === 'self' || lc === 'static' || lc === 'this' || lc === '$this') return 'self';

@@ -36,7 +36,7 @@ import { vueRouterLinkEdges } from './vue-router-synthesizer';
 import { svelteKitLinkEdges, svelteKitPageComponentEdges } from './sveltekit-synthesizer';
 import { createYielder, type MaybeYield } from './cooperative-yield';
 import { crossTierEdges, hasCrossTierPattern } from './tier-synthesizer';
-import { enclosingFn, makeLineAt } from './synth-utils';
+import { arkuiModuleScopeOf, enclosingFn, makeLineAt } from './synth-utils';
 import { resolveImportPath } from './import-resolver';
 import { crossesCodeBoundary } from './name-matcher';
 
@@ -189,6 +189,7 @@ async function fieldChannelEdges(queries: QueryBuilder, ctx: ResolutionContext, 
       if (!fn || (fn.kind !== 'method' && fn.kind !== 'function')) continue;
       if (!am[1]!.startsWith('this.') && fn.filePath !== caller.filePath && refs[0]!.metadata?.resolvedBy !== 'import') continue;
       for (const disp of chDispatchers) {
+        if (added >= MAX_CALLBACKS_PER_CHANNEL) break;
         if (disp.node.id === fn.id) continue;
         const key = `${disp.node.id}>${fn.id}`;
         if (seen.has(key)) continue;
@@ -335,7 +336,10 @@ async function eventEmitterEdges(ctx: ResolutionContext, onYield: MaybeYield): P
       while ((m = ON_RE.exec(content))) {
         const handlerName = m[2] || m[3];
         if (!handlerName) continue;
-        const handler = ctx.getNodesByName(handlerName).find((n) => n.kind === 'function' || n.kind === 'method');
+        const sameName = ctx.getNodesByName(handlerName).filter((n) => n.kind === 'function' || n.kind === 'method');
+        // Prefer the handler in the registering file; otherwise link only a unique
+        // name (an arbitrary pick among same-named functions is a wrong edge).
+        const handler = sameName.find((n) => n.filePath === file) ?? (sameName.length === 1 ? sameName[0] : undefined);
         if (!handler) continue;
         const map = handlersByEvent.get(m[1]!) ?? new Map<string, string>();
         map.set(handler.id, `${file}:${lineOf(m.index)}`); handlersByEvent.set(m[1]!, map);
@@ -568,16 +572,7 @@ async function arkuiEmitterEdges(ctx: ResolutionContext, onYield: MaybeYield): P
   const emits = new Map<string, Site[]>();
   const handlers = new Map<string, Site[]>();
 
-  const moduleDirs = (() => {
-    const ws = ctx.getWorkspacePackages?.();
-    return ws ? [...new Set(ws.byName.values())].sort((a, b) => b.length - a.length) : [];
-  })();
-  const moduleScopeOf = (file: string): string => {
-    for (const dir of moduleDirs) {
-      if (file === dir || file.startsWith(dir + '/')) return dir;
-    }
-    return '';
-  };
+  const moduleScopeOf = arkuiModuleScopeOf(ctx);
 
   for (const file of ctx.getAllFiles()) {
     if ((++scannedFiles & 15) === 0) await onYield();
@@ -672,16 +667,7 @@ async function arkuiRouterEdges(ctx: ResolutionContext, onYield: MaybeYield): Pr
   const seen = new Set<string>();
 
   const allFiles = ctx.getAllFiles();
-  const moduleDirs = (() => {
-    const ws = ctx.getWorkspacePackages?.();
-    return ws ? [...new Set(ws.byName.values())].sort((a, b) => b.length - a.length) : [];
-  })();
-  const moduleScopeOf = (file: string): string => {
-    for (const dir of moduleDirs) {
-      if (file === dir || file.startsWith(dir + '/')) return dir;
-    }
-    return '';
-  };
+  const moduleScopeOf = arkuiModuleScopeOf(ctx);
 
   let scannedFiles = 0;
   for (const file of allFiles) {
@@ -2046,9 +2032,13 @@ async function ginMiddlewareChainEdges(queries: QueryBuilder, ctx: ResolutionCon
     let added = 0;
     for (const [name, registeredAt] of registered) {
       if (added >= MAX_CALLBACKS_PER_CHANNEL) break;
-      const handler = ctx.getNodesByName(name).find(
+      const candidates = ctx.getNodesByName(name).filter(
         (n) => (n.kind === 'function' || n.kind === 'method') && n.language === 'go'
       );
+      // Prefer the handler in the registering file; otherwise link only a unique
+      // name (an arbitrary pick across packages is a wrong edge).
+      const regFile = registeredAt.slice(0, registeredAt.lastIndexOf(':'));
+      const handler = candidates.find((n) => n.filePath === regFile) ?? (candidates.length === 1 ? candidates[0] : undefined);
       if (!handler || handler.id === disp.id) continue;
       const key = `${disp.id}>${handler.id}`;
       if (seen.has(key)) continue;
@@ -3265,7 +3255,7 @@ async function nixOptionPathEdges(queries: QueryBuilder, onYield: MaybeYield): P
     // Longest prefix wins; an ambiguous longest match does NOT fall back to a
     // shorter one (that would link `services.nginx.virtualHosts.x` to
     // `options.services.nginx` when virtualHosts is the contested path).
-    for (let len = Math.min(segs.length, 6); len >= 2; len--) {
+    for (let len = segs.length; len >= 2; len--) {
       const candidates = decls.get(segs.slice(0, len).join('.'));
       if (!candidates || candidates.length === 0) continue;
       const files = new Set(candidates.map((c) => c.filePath));

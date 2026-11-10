@@ -28,6 +28,7 @@ import { cpSync, mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { renderedLinesIn } from './probe-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -66,13 +67,6 @@ const CASES = [
   },
 ];
 
-/** Every `<n>\t<text>` line number present in the response's source blocks. */
-function renderedLines(response) {
-  const out = new Set();
-  for (const m of response.matchAll(/^(\d+)\t/gm)) out.add(Number(m[1]));
-  return out;
-}
-
 /**
  * A symbol counts as rendered only when its DECLARATION line is among the lines
  * the response actually sent — not when its name merely appears somewhere (it
@@ -80,14 +74,14 @@ function renderedLines(response) {
  * is precisely how this defect hid for a whole epic).
  */
 function check(cg, response, names) {
-  const lines = renderedLines(response);
   return names.map((name) => {
     const node = (cg.getNodesByName?.(name) ?? []).find((n) => n.startLine > 0);
     return {
       name,
       file: node?.filePath ?? '(not indexed)',
       line: node?.startLine ?? 0,
-      rendered: !!node && lines.has(node.startLine),
+      // Only the defining file's own section counts: another file's line 42 is not this declaration.
+      rendered: !!node && renderedLinesIn(response, node.filePath).has(node.startLine),
     };
   });
 }

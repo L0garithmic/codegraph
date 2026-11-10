@@ -150,6 +150,17 @@ export const luaExtractor: LanguageExtractor = {
       return false;
     }
 
+    // Global `x = require("x")`: the variable branch returns early on a plain
+    // assignment_statement and skips its initializers, so dig the require call
+    // out here. A `local` declaration's own assignment is handled above.
+    if (node.type === 'assignment_statement' && node.parent?.type !== 'variable_declaration') {
+      const exprList = node.namedChildren.find((c) => c.type === 'expression_list');
+      for (const val of exprList?.namedChildren ?? []) {
+        if (val.type === 'function_call') emit(val);
+      }
+      return false;
+    }
+
     return false;
   },
 };

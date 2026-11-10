@@ -389,7 +389,7 @@ function isExternalImport(
       }
     }
     // Scoped packages or bare specifiers that don't start with aliases
-    if (!importPath.startsWith('@/') && !importPath.startsWith('~/') && !importPath.startsWith('src/')) {
+    if (!Object.keys(FALLBACK_ALIASES).some((alias) => importPath.startsWith(alias))) {
       // Likely an npm package
       return true;
     }
@@ -528,6 +528,20 @@ const EMITTED_SPECIFIER_LANGUAGES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Conventional aliases resolved without tsconfig paths. Shared by alias
+ * resolution and the external-package check, so an alias is never classified
+ * as an npm package before it gets the chance to resolve.
+ */
+const FALLBACK_ALIASES: Record<string, string> = {
+  '@/': 'src/',
+  '~/': 'src/',
+  '@src/': 'src/',
+  'src/': 'src/',
+  '@app/': 'app/',
+  'app/': 'app/',
+};
+
+/**
  * Resolve an aliased/absolute import.
  *
  * Tries, in order:
@@ -578,15 +592,7 @@ function resolveAliasedImport(
 
   // 2. Hard-coded fallback list. Kept for projects that use these
   //    conventional aliases without declaring them in tsconfig.
-  const fallbackAliases: Record<string, string> = {
-    '@/': 'src/',
-    '~/': 'src/',
-    '@src/': 'src/',
-    'src/': 'src/',
-    '@app/': 'app/',
-    'app/': 'app/',
-  };
-  for (const [alias, replacement] of Object.entries(fallbackAliases)) {
+  for (const [alias, replacement] of Object.entries(FALLBACK_ALIASES)) {
     if (importPath.startsWith(alias)) {
       const hit = tryWithExt(importPath.replace(alias, replacement));
       if (hit) return hit;
@@ -718,30 +724,35 @@ function shlexSplit(cmd: string): string[] {
     // Skip whitespace
     while (i < cmd.length && /\s/.test(cmd[i]!)) i++;
     if (i >= cmd.length) break;
+    const [arg, next] = shlexSplitToken(cmd, i);
+    result.push(arg);
+    i = next;
+  }
+  return result;
+}
+
+/** Quote-aware split of a token that may embed quoted parts (`-I"include dir"`). */
+function shlexSplitToken(cmd: string, start: number): [string, number] {
+  let i = start;
+  let arg = '';
+  while (i < cmd.length && !/\s/.test(cmd[i]!)) {
     const ch = cmd[i]!;
     if (ch === '"') {
       i++;
-      let arg = '';
       while (i < cmd.length && cmd[i] !== '"') {
-        if (cmd[i] === '\\' && i + 1 < cmd.length) { i++; arg += cmd[i]; }
-        else { arg += cmd[i]; }
-        i++;
+        if (cmd[i] === '\\' && i + 1 < cmd.length) i++;
+        arg += cmd[i]; i++;
       }
       i++; // closing quote
-      result.push(arg);
     } else if (ch === "'") {
       i++;
-      let arg = '';
       while (i < cmd.length && cmd[i] !== "'") { arg += cmd[i]; i++; }
       i++; // closing quote
-      result.push(arg);
     } else {
-      let arg = '';
-      while (i < cmd.length && !/\s/.test(cmd[i]!)) { arg += cmd[i]; i++; }
-      result.push(arg);
+      arg += ch; i++;
     }
   }
-  return result;
+  return [arg, i];
 }
 
 /**
@@ -1814,6 +1825,7 @@ function resolvePythonModuleMember(
     const target = context.getNodesInFile(resolvedPath).find(
       (n) =>
         n.name === member &&
+        !n.qualifiedName.includes('::') &&
         (n.kind === 'function' ||
           n.kind === 'class' ||
           n.kind === 'variable' ||
@@ -2112,6 +2124,17 @@ function resolveRustModuleFile(
       else if (context.fileExists(asMod)) targetFile = asMod;
       else return null;
       dir = path.join(dir, seg);
+    }
+    // Anchor-only path (`crate::Item`, `self::Item`, `super::Item`): the module
+    // is the anchor's own file — the crate root (lib.rs/main.rs) or the parent's
+    // mod.rs / `<name>.rs`.
+    if (targetFile === null) {
+      for (const f of ['mod.rs', 'lib.rs', 'main.rs']) {
+        const rel = toRel(path.join(startDir, f));
+        if (context.fileExists(rel)) return rel;
+      }
+      const sibling = toRel(path.join(path.dirname(startDir), path.basename(startDir) + '.rs'));
+      return context.fileExists(sibling) ? sibling : null;
     }
     return targetFile;
   };

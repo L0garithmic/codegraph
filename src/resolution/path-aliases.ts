@@ -100,9 +100,38 @@ function stripJsonc(src: string): string {
     out += ch;
     i++;
   }
-  // Trailing commas before } or ] — outside strings, so safe to
-  // run on the comment-stripped output.
-  return out.replace(/,(\s*[}\]])/g, '$1');
+  return stripTrailingCommas(out);
+}
+
+/**
+ * Drop each comma that directly precedes `}` or `]` — but only outside string
+ * literals, so a quoted alias target such as `"./src/a,}b"` is left intact.
+ */
+function stripTrailingCommas(src: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i]!;
+    if (inString) {
+      out += ch;
+      if (ch === '\\' && i + 1 < src.length) {
+        out += src[i + 1]!;
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === ',') {
+      let j = i + 1;
+      while (j < src.length && /\s/.test(src[j]!)) j++;
+      if (src[j] === '}' || src[j] === ']') continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 interface RawTsconfig {

@@ -326,6 +326,9 @@ async function drawPanel(panel, request, token) {
     // One panel's failure is one panel's problem: the message lands in the
     // panel, the rest of the page keeps its data.
     setState(section, 'error', `Could not load this panel — ${err.message ?? err}`);
+    // The headline and table twin describe the previous range; drop them with the chart.
+    $(section, 'figure').textContent = '';
+    drawTable(section, undefined);
     const chart = charts.get(panel.id);
     if (chart) {
       chart.destroy();

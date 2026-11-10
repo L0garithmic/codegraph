@@ -214,7 +214,12 @@ export const dartExtractor: LanguageExtractor = {
   getVisibility: (node) => {
     // Dart convention: _ prefix means private, otherwise public
     let nameNode: SyntaxNode | null = null;
-    if (node.type === 'method_signature') {
+    const ctor = dartConstructorSignature(node);
+    if (ctor) {
+      // A constructor's name is its last identifier: `_internal` in `factory Foo._internal()`.
+      const ids = ctor.namedChildren.filter((c: SyntaxNode) => c.type === 'identifier');
+      nameNode = ids[ids.length - 1] ?? null;
+    } else if (node.type === 'method_signature') {
       const inner = node.namedChildren.find((c: SyntaxNode) =>
         c.type === 'function_signature' || c.type === 'getter_signature' || c.type === 'setter_signature'
       );

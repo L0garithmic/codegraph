@@ -114,7 +114,9 @@ const ENGLISH_PROSE_STOPWORDS = new Set([
 export function extractProseCandidates(prompt: string): string[] {
   if (!prompt) return [];
   const seen = new Set<string>();
-  for (const run of prompt.match(/[\p{L}\p{N}]+/gu) ?? []) {
+  // Strip combining marks BEFORE splitting into runs: a decomposed "résolution"
+  // would otherwise split at the mark into "re" and "solution".
+  for (const run of prompt.normalize('NFD').replace(/\p{M}+/gu, '').match(/[\p{L}\p{N}]+/gu) ?? []) {
     if (seen.size >= MAX_PROSE_CANDIDATES) break;
     if (run.length > MAX_PROSE_CHARS) continue;
     const w = normalizeProseWord(run);

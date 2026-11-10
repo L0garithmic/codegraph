@@ -61,17 +61,15 @@ export const pythonExtractor: LanguageExtractor = {
     return sig;
   },
   isAsync: (node) => {
-    const prev = node.previousSibling;
-    return prev?.type === 'async';
+    // `async` is a keyword child of function_definition, not a preceding sibling.
+    return node.children.some((c) => c.type === 'async');
   },
   isStatic: (node) => {
-    // Check for @staticmethod decorator
-    const prev = node.previousNamedSibling;
-    if (prev?.type === 'decorator') {
-      const text = prev.text;
-      return text.includes('staticmethod');
-    }
-    return false;
+    // Any stacked decorator whose expression is exactly `staticmethod`.
+    const decorated = node.parent?.type === 'decorated_definition' ? node.parent : null;
+    if (!decorated) return false;
+    return decorated.namedChildren.some((c) =>
+      c.type === 'decorator' && c.namedChildren[0]?.text === 'staticmethod');
   },
   extractImport: (node, source) => {
     const importText = source.substring(node.startIndex, node.endIndex).trim();

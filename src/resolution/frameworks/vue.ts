@@ -133,39 +133,26 @@ export const vueResolver: FrameworkResolver = {
       }
     }
 
-    // Pattern 4: @ alias imports (@/components/Foo -> src/components/Foo)
-    if (ref.referenceKind === 'imports' && ref.referenceName.startsWith('@/')) {
-      const aliasPath = ref.referenceName.replace('@/', 'src/');
-      for (const ext of ['', '.ts', '.js', '.vue', '/index.ts', '/index.js', '/index.vue']) {
-        const fullPath = aliasPath + ext;
-        if (context.fileExists(fullPath)) {
-          const nodes = context.getNodesInFile(fullPath);
-          if (nodes.length > 0) {
-            return {
-              original: ref,
-              targetNodeId: nodes[0]!.id,
-              confidence: 0.9,
-              resolvedBy: 'framework',
-            };
-          }
-        }
-      }
-    }
-
-    // Pattern 5: ~ alias imports (~/components/Foo -> src/components/Foo, Nuxt convention)
-    if (ref.referenceKind === 'imports' && ref.referenceName.startsWith('~/')) {
-      const aliasPath = ref.referenceName.replace('~/', 'src/');
-      for (const ext of ['', '.ts', '.js', '.vue', '/index.ts', '/index.js', '/index.vue']) {
-        const fullPath = aliasPath + ext;
-        if (context.fileExists(fullPath)) {
-          const nodes = context.getNodesInFile(fullPath);
-          if (nodes.length > 0) {
-            return {
-              original: ref,
-              targetNodeId: nodes[0]!.id,
-              confidence: 0.9,
-              resolvedBy: 'framework',
-            };
+    // Pattern 4: @ and ~ alias imports (@/components/Foo, ~/components/Foo -> src/components/Foo;
+    // the ~ form is Nuxt's convention)
+    if (ref.referenceKind === 'imports') {
+      const alias = ref.referenceName.startsWith('@/') ? '@/'
+        : ref.referenceName.startsWith('~/') ? '~/'
+        : null;
+      if (alias !== null) {
+        const aliasPath = 'src/' + ref.referenceName.slice(alias.length);
+        for (const ext of ['', '.ts', '.js', '.vue', '/index.ts', '/index.js', '/index.vue']) {
+          const fullPath = aliasPath + ext;
+          if (context.fileExists(fullPath)) {
+            const nodes = context.getNodesInFile(fullPath);
+            if (nodes.length > 0) {
+              return {
+                original: ref,
+                targetNodeId: nodes[0]!.id,
+                confidence: 0.9,
+                resolvedBy: 'framework',
+              };
+            }
           }
         }
       }
@@ -195,9 +182,10 @@ export const vueResolver: FrameworkResolver = {
     const normalized = filePath.replace(/\\/g, '/');
 
     // Detect Nuxt page routes (pages/ directory)
-    const pagesIndex = normalized.indexOf('/pages/');
-    if (pagesIndex !== -1 && normalized.endsWith('.vue')) {
-      const routePath = filePathToNuxtRoute(normalized, pagesIndex + '/pages/'.length);
+    // `pages/` may lead the path (project-relative) or follow a slash (`src/pages/`).
+    const pagesMatch = /(?:^|\/)pages\//.exec(normalized);
+    if (pagesMatch && normalized.endsWith('.vue')) {
+      const routePath = filePathToNuxtRoute(normalized, pagesMatch.index + pagesMatch[0].length);
       if (routePath !== null) {
         nodes.push({
           id: `route:${filePath}:${routePath}:1`,
@@ -299,7 +287,7 @@ function resolveComponent(
 
   // Same directory first for specificity
   const fromDir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const sameDir = matches.filter((f) => f.startsWith(fromDir));
+  const sameDir = matches.filter((f) => f.substring(0, f.lastIndexOf('/')) === fromDir);
   if (sameDir.length > 0) return componentIn(sameDir[0]!);
 
   // No positional signal: only an UNAMBIGUOUS basename may resolve;
@@ -316,8 +304,8 @@ function filePathToNuxtRoute(normalized: string, afterPagesStart: number): strin
   // Remove the .vue extension
   const withoutExt = afterPages.replace(/\.vue$/, '');
 
-  // Remove /index suffix (index.vue -> parent route)
-  const withoutIndex = withoutExt.replace(/\/index$/, '');
+  // Remove /index suffix (index.vue -> parent route; a bare pages/index.vue -> the root)
+  const withoutIndex = withoutExt.replace(/(?:^|\/)index$/, '');
 
   // Convert Nuxt param syntax [param] to :param
   let route = '/' + withoutIndex

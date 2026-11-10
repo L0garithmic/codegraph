@@ -46,7 +46,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { parse as parseJsonc, modify, applyEdits } from 'jsonc-parser';
+import { modify, applyEdits } from 'jsonc-parser';
 import {
   AgentTarget,
   DetectionResult,
@@ -55,9 +55,12 @@ import {
   WriteResult,
 } from './types';
 import {
+  JSONC_FORMATTING,
   atomicWriteFileSync,
   getMcpServerConfig,
   jsonDeepEqual,
+  parseConfig,
+  readConfigText,
 } from './shared';
 
 function vscodeUserDir(): string {
@@ -97,22 +100,6 @@ function buildVscodeServerEntry(loc: Location): { type: string; command: string;
   return { ...base, args: [...base.args] };
 }
 
-function readConfigText(file: string): string {
-  if (!fs.existsSync(file)) return '';
-  return fs.readFileSync(file, 'utf-8');
-}
-
-function parseConfig(text: string): Record<string, any> {
-  if (!text.trim()) return {};
-  const errors: any[] = [];
-  const result = parseJsonc(text, errors, { allowTrailingComma: true });
-  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
-    return {};
-  }
-  return result as Record<string, any>;
-}
-
-const FORMATTING = { tabSize: 2, insertSpaces: true, eol: '\n' };
 
 class CopilotVscodeTarget implements AgentTarget {
   readonly id = 'copilot-vscode' as const;
@@ -175,7 +162,7 @@ function writeMcpEntry(loc: Location): WriteResult['files'][number] {
   // Surgical edit — preserves comments, formatting, and sibling
   // servers ("servers" is created when missing).
   const edits = modify(text, ['servers', 'codegraph'], after, {
-    formattingOptions: FORMATTING,
+    formattingOptions: JSONC_FORMATTING,
   });
   const updated = applyEdits(text, edits);
   atomicWriteFileSync(file, updated);
@@ -191,7 +178,7 @@ function removeMcpEntry(loc: Location): WriteResult['files'][number] {
   if (!config.servers?.codegraph) return { path: file, action: 'not-found' };
 
   let edits = modify(text, ['servers', 'codegraph'], undefined, {
-    formattingOptions: FORMATTING,
+    formattingOptions: JSONC_FORMATTING,
   });
   let updated = applyEdits(text, edits);
 
@@ -201,7 +188,7 @@ function removeMcpEntry(loc: Location): WriteResult['files'][number] {
   const afterParsed = parseConfig(updated);
   if (afterParsed.servers && typeof afterParsed.servers === 'object' &&
       Object.keys(afterParsed.servers).length === 0) {
-    edits = modify(updated, ['servers'], undefined, { formattingOptions: FORMATTING });
+    edits = modify(updated, ['servers'], undefined, { formattingOptions: JSONC_FORMATTING });
     updated = applyEdits(updated, edits);
   }
 

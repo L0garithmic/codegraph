@@ -45,6 +45,7 @@ import type {
 } from '../types';
 import { stripCommentsForRegex } from '../strip-comments';
 import { dependsOn } from './package-deps';
+import { matchDelim, skipTemplate } from '../delimiter-match';
 
 // =============================================================================
 // Route files
@@ -62,6 +63,9 @@ const ROUTE_EXT = /\.(?:(?:ios|android|native|web)\.)?(tsx|ts|jsx|js|mjs|cjs)$/;
 export function routePathForFile(filePath: string): string | null {
   const dir = APP_DIR.exec(filePath);
   if (!dir) return null;
+  // An `app/` folder nested under a `src/` source tree (`src/features/app/`) is
+  // ordinary code, not the app root; only the project's own `app/` or `src/app/` is.
+  if (filePath.slice(0, dir.index).split('/').includes('src')) return null;
   const rel = filePath.slice(dir.index + dir[0].length);
   const ext = ROUTE_EXT.exec(rel);
   if (!ext) return null;
@@ -146,58 +150,6 @@ const MAX_CALL_LINES = 12;
 
 /** Placeholder for an interpolated `${…}` inside a template-literal href (shared with the cross-tier synthesizer). */
 export const HOLE = '\u0000';
-
-/** Index of the `)` matching the `(` at `open`, skipping string bodies; -1 if unbalanced. */
-function matchParen(s: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === '"' || ch === "'") {
-      const q = ch;
-      i++;
-      while (i < s.length && s[i] !== q) {
-        if (s[i] === '\\') i++;
-        i++;
-      }
-      continue;
-    }
-    if (ch === '`') {
-      i = skipTemplate(s, i);
-      continue;
-    }
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/** Index of the closing backtick for the template starting at `open`. */
-function skipTemplate(s: string, open: number): number {
-  let i = open + 1;
-  while (i < s.length) {
-    const ch = s[i];
-    if (ch === '\\') {
-      i += 2;
-      continue;
-    }
-    if (ch === '`') return i;
-    if (ch === '$' && s[i + 1] === '{') {
-      let depth = 0;
-      for (i = i + 1; i < s.length; i++) {
-        if (s[i] === '{') depth++;
-        else if (s[i] === '}') {
-          depth--;
-          if (depth === 0) break;
-        } else if (s[i] === '`') i = skipTemplate(s, i);
-      }
-    }
-    i++;
-  }
-  return s.length;
-}
 
 /** Index of the quote that closes the string literal opening at `at` (or the end of `s`). */
 export function stringEnd(s: string, at: number): number {
@@ -348,7 +300,7 @@ export function parseHrefExpression(expr: string): HrefLiteral | null {
   // `expr as any` / `expr satisfies Href` — a cast says nothing about the value.
   let args = expr.trim().replace(/\s+(?:as|satisfies)\s+[\w$.<>[\]|&\s]+$/, '');
   // `(a ? b : c)` — unwrap one layer of grouping parens.
-  while (args.startsWith('(') && matchParen(args, 0) === args.length - 1) {
+  while (args.startsWith('(') && matchDelim(args, 0, '(', ')') === args.length - 1) {
     args = args.slice(1, -1).trim().replace(/\s+(?:as|satisfies)\s+[\w$.<>[\]|&\s]+$/, '');
   }
   if (args.length === 0) return null;
@@ -429,7 +381,7 @@ export function nthArgumentText(
   let open = nameAt + method.length;
   while (open < text.length && /\s/.test(text[open]!)) open++;
   if (text[open] !== '(') return null;
-  const close = matchParen(text, open);
+  const close = matchDelim(text, open, '(', ')');
   let args = text.slice(open + 1, close < 0 ? undefined : close);
   for (let i = 0; i < index; i++) {
     const comma = indexAtDepth0(args, ',', 0);
@@ -697,9 +649,12 @@ function scoreMatch(href: string[], route: string[]): number | null {
     }
     if (i >= href.length) return null;
     const h = href[i]!;
+    // A templated href segment (`*`, an interpolated `${…}`) names no value, so
+    // it may fill a param slot (`[id]`, `:id`, or a mixed `@:user` / `@[user]`)
+    // but never stands in for a literal segment.
     if (isParamSegment(seg)) score += 2;
     else if (h === seg) score += 3;
-    else if (h === '*') score += 1;
+    else if (h === '*' && /[:[]/.test(seg)) score += 1;
     else return null;
     i++;
   }

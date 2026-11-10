@@ -583,31 +583,38 @@ export class QueryBuilder {
     refs: UnresolvedReference[];
     file: FileRecord;
   }): void {
-    this.db.transaction(() => {
-      this.insertNodes(bundle.nodes);
-      if (bundle.edges.length > 0) {
-        const rows: unknown[][] = [];
-        for (const edge of bundle.edges) {
-          rows.push([
-            edge.source,
-            edge.target,
-            edge.kind,
-            edge.metadata ? JSON.stringify(edge.metadata) : null,
-            edge.line ?? null,
-            edge.column ?? null,
-            edge.provenance ?? null,
-          ]);
+    try {
+      this.db.transaction(() => {
+        this.insertNodes(bundle.nodes);
+        if (bundle.edges.length > 0) {
+          const rows: unknown[][] = [];
+          for (const edge of bundle.edges) {
+            rows.push([
+              edge.source,
+              edge.target,
+              edge.kind,
+              edge.metadata ? JSON.stringify(edge.metadata) : null,
+              edge.line ?? null,
+              edge.column ?? null,
+              edge.provenance ?? null,
+            ]);
+          }
+          this.runBatched(
+            'insertEdges',
+            'INSERT OR IGNORE INTO edges (source, target, kind, metadata, line, col, provenance) VALUES ',
+            '(?,?,?,?,?,?,?)',
+            rows
+          );
         }
-        this.runBatched(
-          'insertEdges',
-          'INSERT OR IGNORE INTO edges (source, target, kind, metadata, line, col, provenance) VALUES ',
-          '(?,?,?,?,?,?,?)',
-          rows
-        );
-      }
-      if (bundle.refs.length > 0) this.insertUnresolvedRefsBatch(bundle.refs);
-      this.upsertFile(bundle.file);
-    })();
+        if (bundle.refs.length > 0) this.insertUnresolvedRefsBatch(bundle.refs);
+        this.upsertFile(bundle.file);
+      })();
+    } catch (err) {
+      // The rollback also undid the vocabulary rows that insertNodes marked as
+      // written. Forget them, so a retry writes those rows again.
+      this.segmentedNames.clear();
+      throw err;
+    }
   }
 
   /**
@@ -1047,9 +1054,10 @@ export class QueryBuilder {
         WHERE kind = 'route'
         GROUP BY file_path
         ORDER BY cnt DESC
-        LIMIT 20
       `);
     }
+    // Every route-bearing file, not the top 20: the 30% share is over ALL
+    // eligible routes, so a cut before the filter would shrink the denominator.
     const rows = this.stmts.getTopRouteFile.all() as Array<{ file_path: string; cnt: number }>;
     const generated = this.getGeneratedPathsAmong(rows.map(r => r.file_path));
     const filtered = rows.filter(r => !isLowValueFile(r.file_path, generated));
@@ -1346,9 +1354,13 @@ export class QueryBuilder {
     const kinds = mergedKinds;
     const languages = mergedLanguages;
 
+    // A hard path:/name: gate runs after the fetch, so when one is present the
+    // fetch is widened 5× — otherwise the gate could only see `limit` rows.
+    const fetchLimit = pathFilters.length > 0 || nameFilters.length > 0 ? limit * 5 : limit;
+
     // First try FTS5 with prefix matching (skip if FTS5 not available, #1532)
     let results = text
-      ? (this._fts5Available !== false ? this.searchNodesFTS(text, { kinds, languages, limit, offset }) : [])
+      ? (this._fts5Available !== false ? this.searchNodesFTS(text, { kinds, languages, limit: fetchLimit, offset }) : [])
       // Over-fetch by 5× when running filter-only (no text). The
       // post-scoring path: + name: filters can be very selective, so
       // a smaller multiplier risks returning fewer than `limit`
@@ -1357,7 +1369,7 @@ export class QueryBuilder {
 
     // If no FTS results, try LIKE-based substring search
     if (results.length === 0 && text.length >= 2) {
-      results = this.searchNodesLike(text, { kinds, languages, limit, offset });
+      results = this.searchNodesLike(text, { kinds, languages, limit: fetchLimit, offset });
     }
 
     // Final fuzzy fallback: scan all known names and keep those within
@@ -1435,10 +1447,6 @@ export class QueryBuilder {
         };
       });
       results.sort((a, b) => b.score - a.score);
-      // Trim to requested limit after rescoring
-      if (results.length > limit) {
-        results = results.slice(0, limit);
-      }
     }
 
     // Apply path: + name: filters AFTER scoring. Scoring already uses
@@ -1458,6 +1466,12 @@ export class QueryBuilder {
         const nm = r.node.name.toLowerCase();
         return lowered.some((n) => nm.includes(n));
       });
+    }
+
+    // Trim to the requested limit only after the hard gates, so a candidate
+    // that passes them is not discarded for ranking below the cut.
+    if (results.length > limit) {
+      results = results.slice(0, limit);
     }
 
     return results;

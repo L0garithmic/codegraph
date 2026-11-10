@@ -395,14 +395,15 @@ function extractSpringConfig(
       const sep = (() => {
         for (let j = 0; j < raw.length; j++) {
           const ch = raw[j];
-          if (ch === '=' || ch === ':') return j;
+          if (ch === '=' || ch === ':' || ch === ' ' || ch === '\t' || ch === '\f') return j;
           if (ch === '\\' && raw[j + 1]) { j++; continue; }
         }
         return -1;
       })();
       if (sep < 0) continue;
       const key = raw.slice(0, sep).trim();
-      const val = raw.slice(sep + 1).trim();
+      // A whitespace separator may be followed by the `=` or `:` the format also allows.
+      const val = raw.slice(sep + 1).trim().replace(/^[=:]\s*/, '');
       emitLeaf(key, i + 1, val);
     }
     return { nodes, references: [] };

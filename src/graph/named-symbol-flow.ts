@@ -36,7 +36,7 @@ import type CodeGraph from '../index';
 import type { Node, Edge } from '../types';
 import { isTestFile } from '../search/query-utils';
 
-import { lastQualifierPart, matchesSymbol } from './symbol-lookup';
+import { lookupSymbolNodes } from './symbol-lookup';
 
 // Preserve the existing imports while sharing the matcher with the CLI and MCP.
 export { RUST_PATH_PREFIXES, lastQualifierPart, matchesSymbol } from './symbol-lookup';
@@ -79,15 +79,9 @@ export function findAllSymbols(cg: CodeGraph, symbol: string): { nodes: Node[]; 
     // ranking a differently-cased sibling above the real node (#1473 Fetch).
     exactNodes = cg.getNodesByName(symbol);
   } else {
-    let results = cg.searchNodes(symbol, { limit: 50 });
-    // Mirror findSymbolMatches — FTS strips colons, so re-search by bare tail.
-    if (results.length === 0) {
-      const tail = lastQualifierPart(symbol);
-      if (tail && tail !== symbol) results = cg.searchNodes(tail, { limit: 50 });
-    }
-    exactNodes = results
-      .filter((r) => matchesSymbol(r.node, symbol))
-      .map((r) => r.node);
+    // Qualified: the same resolver the CLI and MCP use (exact-name index first,
+    // then FTS), so the two cannot disagree about which definitions a name means.
+    exactNodes = lookupSymbolNodes(cg, symbol).nodes;
   }
 
   if (exactNodes.length === 0) {

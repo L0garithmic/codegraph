@@ -74,15 +74,20 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
 
 let entriesInflight: Promise<void> | null = null;
+/** Only the newest entry-points request may write; an older one landing late is ignored. */
+let entriesGeneration = 0;
 
 function loadEntries(): Promise<void> {
   if (entriesInflight) return entriesInflight;
+  const generation = ++entriesGeneration;
   entriesInflight = fetchEntryPoints({ limit: ENTRY_LIMIT, routes: ENTRY_ROUTE_LIMIT })
     .then((value) => {
+      if (generation !== entriesGeneration) return;
       entries = value;
       entriesFailure = null;
     })
     .catch((cause: unknown) => {
+      if (generation !== entriesGeneration) return;
       // The palette still works without them; a failed "where do I start"
       // should never stop someone from typing a name. The entry-points panel
       // is the one screen that has nothing else to show, so the reason is
@@ -91,7 +96,7 @@ function loadEntries(): Promise<void> {
       entriesFailure = cause instanceof Error ? cause.message : String(cause);
     })
     .finally(() => {
-      entriesSettled = true;
+      if (generation === entriesGeneration) entriesSettled = true;
     });
   return entriesInflight;
 }

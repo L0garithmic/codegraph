@@ -38,11 +38,26 @@ const FANOUT_CAP = 2000; // backstop only; real apps are 1 route → 1 method.
  * for a same-package (unqualified) handler. The response pointer (`*cash.ListRes`)
  * is captured too but never matches a request type, so it drops out of the join.
  */
+/** The parameter list of a Go method signature: the receiver and the result
+ *  types are not parameters, so a pointer that only appears there never joins. */
+function goParamList(sig: string): string {
+  const body = sig.replace(/^\s*func\s*\([^()]*\)\s*/, '');
+  const open = body.indexOf('(');
+  if (open < 0) return '';
+  let depth = 0;
+  for (let i = open; i < body.length; i++) {
+    if (body[i] === '(') depth++;
+    else if (body[i] === ')' && --depth === 0) return body.slice(open + 1, i);
+  }
+  return body.slice(open + 1);
+}
+
 function pointerParamTypes(sig: string): string[] {
   const out: string[] = [];
   const re = /\*\s*(?:(\w+)\.)?([A-Z]\w*)\b/g;
+  const params = goParamList(sig);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(sig)) !== null) {
+  while ((m = re.exec(params)) !== null) {
     if (m[1]) out.push(`${m[1]}.${m[2]}`);
     out.push(m[2]!);
   }

@@ -189,7 +189,10 @@ export function isAllowedOrigin(origin: string | undefined, port: number): boole
   // WHATWG keeps IPv6 hostnames bracketed; the allowlist stores them bare.
   const hostname = url.hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
   if (!LOOPBACK_HOSTNAMES.has(hostname)) return false;
-  return url.port === '' || Number(url.port) === port;
+  // WHATWG drops an explicit default port (`:80` on http, `:443` on https), so an
+  // empty `port` means the scheme's default port, never "any port".
+  const effectivePort = url.port === '' ? (url.protocol === 'https:' ? 443 : 80) : Number(url.port);
+  return effectivePort === port;
 }
 
 /**

@@ -145,8 +145,9 @@ def index():
     return render_template('index.html')
 `;
     const { nodes, references } = flaskResolver.extract!('routes.py', src);
-    expect(nodes.map((n) => n.name)).toEqual(['GET /', 'GET /index']);
-    expect(references.map((r) => r.referenceName)).toEqual(['index', 'index']);
+    // Each stacked decorator declares GET and POST, and Flask serves both verbs.
+    expect(nodes.map((n) => n.name)).toEqual(['GET /', 'POST /', 'GET /index', 'POST /index']);
+    expect(references.map((r) => r.referenceName)).toEqual(['index', 'index', 'index', 'index']);
   });
 
   it('extracts the method from a tuple methods=(...) (not just a list)', () => {

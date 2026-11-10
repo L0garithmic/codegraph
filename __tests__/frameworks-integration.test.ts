@@ -137,9 +137,10 @@ describe('Flask end-to-end framework extraction', () => {
     await cg.indexAll();
 
     // Both stacked @bp.route decorators are extracted (the second was previously
-    // dropped because @login_required broke the "def must follow" assumption).
+    // dropped because @login_required broke the "def must follow" assumption),
+    // and each verb in methods=[...] is a route of its own.
     const routes = cg.getNodesByKind('route');
-    expect(routes.map((r) => r.name).sort()).toEqual(['GET /', 'GET /index']);
+    expect(routes.map((r) => r.name).sort()).toEqual(['GET /', 'GET /index', 'POST /', 'POST /index']);
 
     // The view function exists even though its name is a Python builtin method.
     const fn = cg.getNodesByKind('function').find((n) => n.name === 'index');

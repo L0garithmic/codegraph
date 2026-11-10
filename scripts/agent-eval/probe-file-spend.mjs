@@ -30,6 +30,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { exitCodeFor } from './probe-lib.mjs';
 
 const CORPUS = process.env.CORPUS ?? '/tmp/codegraph-corpus';
 
@@ -148,6 +149,7 @@ try {
   rmSync(tmp, { recursive: true, force: true });
 }
 
+const total = results.reduce((n, r) => n + r.flags.length, 0);
 if (asJson) {
   console.log(JSON.stringify(results, null, 2));
 } else {
@@ -176,7 +178,6 @@ if (asJson) {
         + `(score ${Math.round(f.overspentScore)}) spent ${num(f.overspentSpent)}/${num(f.overspentReserved)}`);
     }
   }
-  const total = results.reduce((n, r) => n + r.flags.length, 0);
   say('');
   say(total === 0
     ? 'No file leaves a large share of its reservation unspent while a weaker file overspends.'
@@ -191,5 +192,6 @@ if (asJson) {
       ? 'No repo flags more or delivers less than the baseline.'
       : `REGRESSION vs baseline: ${worse.map((r) => r.repo).join(', ')}.`);
   }
-  if (total > 0) process.exitCode = 1;
 }
+// The gate applies to every output format: --json still exits 1 on a flagged report.
+process.exitCode = exitCodeFor(results);

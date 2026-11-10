@@ -70,7 +70,7 @@ export const djangoResolver: FrameworkResolver = {
     // path('url', handler, name=...) / re_path(r'...', handler) / url(r'...', handler)
     // Capture groups: 1=function name, 2=url string, 3=handler expr
     // Handler expr may contain one balanced () pair (e.g. View.as_view(), include('x.y'))
-    const routeRegex = /\b(path|re_path|url)\s*\(\s*r?['"]([^'"]+)['"]\s*,\s*([\w.]+(?:\s*\([^)]*\))?)/g;
+    const routeRegex = /\b(path|re_path|url)\s*\(\s*r?['"]([^'"]*)['"]\s*,\s*([\w.]+(?:\s*\([^)]*\))?)/g;
 
     let match: RegExpExecArray | null;
     while ((match = routeRegex.exec(safe)) !== null) {
@@ -444,30 +444,17 @@ function extractDecoratorRoutes(filePath: string, content: string, opts: Decorat
   let match: RegExpExecArray | null;
   while ((match = opts.decoratorRegex.exec(content)) !== null) {
     const routePath = match[opts.pathGroup];
-    let method = opts.defaultMethod;
+    // A methods list declares every verb the route serves: one route node each.
+    const declared = opts.methodFromGroup && match[opts.methodFromGroup]
+      ? [...match[opts.methodFromGroup]!.matchAll(/['"]([A-Z]+)['"]/gi)].map((m) => m[1]!.toUpperCase())
+      : [];
+    let methods = [opts.defaultMethod];
     if (opts.methodGroup && match[opts.methodGroup]) {
-      method = match[opts.methodGroup]!.toUpperCase();
-    } else if (opts.methodFromGroup && match[opts.methodFromGroup]) {
-      const m = match[opts.methodFromGroup]!.match(/['"]([A-Z]+)['"]/i);
-      if (m) method = m[1]!.toUpperCase();
+      methods = [match[opts.methodGroup]!.toUpperCase()];
+    } else if (declared.length > 0) {
+      methods = declared;
     }
     const line = content.slice(0, match.index).split('\n').length;
-    const name = method ? `${method} ${routePath || '/'}` : (routePath || '/');
-    const routeNode: Node = {
-      id: `route:${filePath}:${line}:${method}:${routePath}`,
-      kind: 'route',
-      name,
-      qualifiedName: `${filePath}::${method}:${routePath}`,
-      filePath,
-      startLine: line,
-      endLine: line,
-      startColumn: 0,
-      endColumn: match[0].length,
-      language: opts.language,
-      updatedAt: now,
-    };
-    nodes.push(routeNode);
-
     let handlerName: string | undefined;
     if (opts.handlerGroup && match[opts.handlerGroup]) {
       handlerName = match[opts.handlerGroup];
@@ -476,16 +463,33 @@ function extractDecoratorRoutes(filePath: string, content: string, opts: Decorat
       const defMatch = tail.match(/\n\s*(?:async\s+)?def\s+(\w+)/);
       if (defMatch) handlerName = defMatch[1];
     }
-    if (handlerName) {
-      references.push({
-        fromNodeId: routeNode.id,
-        referenceName: handlerName,
-        referenceKind: 'references',
-        line,
-        column: 0,
+    for (const method of methods) {
+      const name = method ? `${method} ${routePath || '/'}` : (routePath || '/');
+      const routeNode: Node = {
+        id: `route:${filePath}:${line}:${method}:${routePath}`,
+        kind: 'route',
+        name,
+        qualifiedName: `${filePath}::${method}:${routePath}`,
         filePath,
-        language: 'python',
-      });
+        startLine: line,
+        endLine: line,
+        startColumn: 0,
+        endColumn: match[0].length,
+        language: opts.language,
+        updatedAt: now,
+      };
+      nodes.push(routeNode);
+      if (handlerName) {
+        references.push({
+          fromNodeId: routeNode.id,
+          referenceName: handlerName,
+          referenceKind: 'references',
+          line,
+          column: 0,
+          filePath,
+          language: 'python',
+        });
+      }
     }
   }
   return { nodes, references };

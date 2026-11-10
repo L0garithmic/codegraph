@@ -37,7 +37,13 @@ function extractVbnetReturnType(node: SyntaxNode, source: string): string | unde
   if (!typeNode || typeNode.type === 'predefined_type' || typeNode.type === 'array_type') return undefined;
   let t = getNodeText(typeNode, source).trim();
   t = t.replace(/\?+$/, ''); // nullable `Foo?`
-  t = t.replace(/\(\s*Of\b[^)]*\)/gi, ''); // generics `List(Of Foo)` → `List`
+  // generics `List(Of Foo)` → `List`; innermost groups first, so nested
+  // `Dictionary(Of String, List(Of Foo))` unwraps to `Dictionary` too.
+  let prev: string;
+  do {
+    prev = t;
+    t = t.replace(/\(\s*Of\b[^()]*\)/gi, '');
+  } while (t !== prev);
   const last = t.split('.').pop()?.trim();
   if (!last || !/^[A-Za-z_]\w*$/.test(last)) return undefined;
   return last;
@@ -51,7 +57,7 @@ export const vbnetExtractor: LanguageExtractor = {
   classTypes: ['class_declaration', 'module_declaration'],
   methodTypes: [
     'method_declaration',
-    'constructor_declaration',
+    // `Sub New` constructors are created by the visitNode hook, not listed here.
     // `Declare Function GetWindowLong Lib "user32" ...` (P/Invoke)
     'external_method_declaration',
     // Interface members are distinct node types in this grammar (unlike C#).

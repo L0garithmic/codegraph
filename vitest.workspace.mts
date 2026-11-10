@@ -30,7 +30,7 @@ export default defineWorkspace([
     test: {
       name: 'engine',
       include: ['__tests__/**/*.test.ts'],
-      exclude: ['**/node_modules/**', '**/dist/**', '__tests__/ui-package.test.ts'],
+      exclude: ['**/node_modules/**', '**/dist/**', '__tests__/ui-package.test.ts', '__tests__/**/*.svelte.test.ts'],
     },
   },
   {
@@ -48,7 +48,8 @@ export default defineWorkspace([
     test: {
       name: 'ui',
       globals: true,
-      include: ['__tests__/ui-package.test.ts'],
+      // `*.svelte.test.ts` imports `.svelte.ts` rune modules, which only the Svelte plugin compiles.
+      include: ['__tests__/ui-package.test.ts', '__tests__/**/*.svelte.test.ts'],
       environment: 'jsdom',
       server: {
         deps: {

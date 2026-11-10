@@ -10,14 +10,20 @@
 // change looks good on probe metrics, run a focused claude audit for the
 // few repos that matter to confirm end-to-end cost behavior.
 //
-// Usage: node scripts/agent-eval/probe-sweep.mjs [--tool=context|explore|trace] [--repos=a,b,c]
+// Usage: node scripts/agent-eval/probe-sweep.mjs [--tool=explore] [--repos=a,b,c]
+// Only `explore` is measured: codegraph_context and codegraph_trace were removed from the server.
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { sweepRow } from './probe-lib.mjs';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map(a => a.startsWith('--') ? a.slice(2).split('=') : [a, true])
 );
-const TOOL = args.tool ?? 'context';
+const TOOL = args.tool ?? 'explore';
+if (TOOL !== 'explore') {
+  console.error(`probe-sweep: codegraph_${TOOL} is not a tool any more; use --tool=explore`);
+  process.exit(1);
+}
 
 const load = (rel) => import(pathToFileURL(resolve(rel)).href);
 const idx = await load('dist/index.js');
@@ -75,18 +81,9 @@ for (const s of subjects) {
     const cg = CodeGraph.openSync(s.repo);
     const handler = new ToolHandler(cg);
     const t1 = Date.now();
-    const res = await handler.execute('codegraph_' + TOOL,
-      TOOL === 'context' ? { task: s.q } :
-      TOOL === 'explore' ? { query: s.q } : { from: 'main', to: 'main' });
-    const text = res.content?.[0]?.text ?? '';
-    const signals = detect(text);
-    rows.push({
-      id: s.id,
-      ms: Date.now() - t1,
-      chars: text.length,
-      lines: text.split('\n').length,
-      ...signals,
-    });
+    const res = await handler.execute('codegraph_' + TOOL, { query: s.q });
+    const row = sweepRow(s, res, Date.now() - t1);
+    rows.push(row.error ? row : { ...row, ...detect(res.content?.[0]?.text ?? '') });
     try { cg.close?.(); } catch {}
   } catch (e) {
     rows.push({ id: s.id, error: String(e).slice(0, 80) });

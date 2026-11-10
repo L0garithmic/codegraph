@@ -48,7 +48,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { parse as parseJsonc, modify, applyEdits } from 'jsonc-parser';
+import { modify, applyEdits } from 'jsonc-parser';
 import {
   AgentTarget,
   DetectionResult,
@@ -57,8 +57,11 @@ import {
   WriteResult,
 } from './types';
 import {
+  JSONC_FORMATTING,
   atomicWriteFileSync,
   jsonDeepEqual,
+  parseConfig,
+  readConfigText,
   removeMarkedSection,
   upsertInstructionsEntry,
 } from './shared';
@@ -111,20 +114,6 @@ function instructionsPath(loc: Location): string {
   return path.join(configBaseDir(loc), 'AGENTS.md');
 }
 
-function readConfigText(file: string): string {
-  if (!fs.existsSync(file)) return '';
-  return fs.readFileSync(file, 'utf-8');
-}
-
-function parseConfig(text: string): Record<string, any> {
-  if (!text.trim()) return {};
-  const errors: any[] = [];
-  const result = parseJsonc(text, errors, { allowTrailingComma: true });
-  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
-    return {};
-  }
-  return result as Record<string, any>;
-}
 
 function getOpencodeServerEntry(): {
   type: string;
@@ -147,7 +136,6 @@ function hasCodegraphEntry(config: Record<string, any>): boolean {
   return !!(config.mcp?.servers?.codegraph || config.mcp?.codegraph);
 }
 
-const FORMATTING = { tabSize: 2, insertSpaces: true, eol: '\n' };
 
 class OpencodeTarget implements AgentTarget {
   readonly id = 'opencode' as const;
@@ -235,7 +223,7 @@ function writeMcpEntry(loc: Location): WriteResult['files'][number] {
   // Add $schema if the user's existing file is missing it.
   if (!config.$schema) {
     const schemaEdits = modify(text, ['$schema'], 'https://opencode.ai/config.json', {
-      formattingOptions: FORMATTING,
+      formattingOptions: JSONC_FORMATTING,
     });
     text = applyEdits(text, schemaEdits);
   }
@@ -244,7 +232,7 @@ function writeMcpEntry(loc: Location): WriteResult['files'][number] {
   // keeps only the native entry where `codemode` survives normalization.
   if (hasLegacy) {
     const legacyEdits = modify(text, ['mcp', 'codegraph'], undefined, {
-      formattingOptions: FORMATTING,
+      formattingOptions: JSONC_FORMATTING,
     });
     text = applyEdits(text, legacyEdits);
   }
@@ -252,7 +240,7 @@ function writeMcpEntry(loc: Location): WriteResult['files'][number] {
   // Surgical edit — preserves comments, formatting, and order of
   // every key we don't touch.
   const edits = modify(text, ['mcp', 'servers', 'codegraph'], after, {
-    formattingOptions: FORMATTING,
+    formattingOptions: JSONC_FORMATTING,
   });
   const updated = applyEdits(text, edits);
   atomicWriteFileSync(file, updated);
@@ -276,7 +264,7 @@ function removeMcpEntryAt(file: string): WriteResult['files'][number] {
   let updated = text;
   if (config.mcp?.servers?.codegraph) {
     const edits = modify(updated, ['mcp', 'servers', 'codegraph'], undefined, {
-      formattingOptions: FORMATTING,
+      formattingOptions: JSONC_FORMATTING,
     });
     updated = applyEdits(updated, edits);
   }
@@ -285,7 +273,7 @@ function removeMcpEntryAt(file: string): WriteResult['files'][number] {
   const mid = parseConfig(updated);
   if (mid.mcp?.codegraph) {
     const edits = modify(updated, ['mcp', 'codegraph'], undefined, {
-      formattingOptions: FORMATTING,
+      formattingOptions: JSONC_FORMATTING,
     });
     updated = applyEdits(updated, edits);
   }
@@ -295,7 +283,7 @@ function removeMcpEntryAt(file: string): WriteResult['files'][number] {
   if (afterParsed.mcp?.servers && typeof afterParsed.mcp.servers === 'object' &&
       Object.keys(afterParsed.mcp.servers).length === 0) {
     const edits = modify(updated, ['mcp', 'servers'], undefined, {
-      formattingOptions: FORMATTING,
+      formattingOptions: JSONC_FORMATTING,
     });
     updated = applyEdits(updated, edits);
     afterParsed = parseConfig(updated);
@@ -304,7 +292,7 @@ function removeMcpEntryAt(file: string): WriteResult['files'][number] {
   // If `mcp` is now an empty object, drop the wrapper too.
   if (afterParsed.mcp && typeof afterParsed.mcp === 'object' &&
       Object.keys(afterParsed.mcp).length === 0) {
-    const edits = modify(updated, ['mcp'], undefined, { formattingOptions: FORMATTING });
+    const edits = modify(updated, ['mcp'], undefined, { formattingOptions: JSONC_FORMATTING });
     updated = applyEdits(updated, edits);
   }
 

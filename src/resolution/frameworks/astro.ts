@@ -158,8 +158,10 @@ function resolveComponent(
   if (components.length === 0) return null;
 
   // Prefer same directory
-  const fromDir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const sameDir = components.filter((n) => n.filePath.startsWith(fromDir));
+  // Compare whole directories: a string prefix would also match `src/components-old/`.
+  const dirOf = (file: string) => file.substring(0, Math.max(0, file.lastIndexOf('/')));
+  const fromDir = dirOf(fromFile);
+  const sameDir = components.filter((n) => dirOf(n.filePath) === fromDir);
   if (sameDir.length > 0) return sameDir[0]!.id;
 
   // No positional signal: only an UNAMBIGUOUS name may resolve — picking

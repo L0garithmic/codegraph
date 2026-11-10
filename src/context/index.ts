@@ -409,9 +409,9 @@ export class ContextBuilder {
         : m.synthesizedBy === 'react-render'
         ? `React re-render via setState${at}`
         : m.synthesizedBy === 'jsx-render'
-        ? `renders <${String(m.via || 'child')}>`
+        ? `renders <${String(m.via || 'child')}>${at}`
         : m.synthesizedBy === 'vue-handler'
-        ? `Vue @${String(m.event || 'event')} handler`
+        ? `Vue @${String(m.event || 'event')} handler${at}`
         : m.synthesizedBy === 'http-client'
         ? `HTTP ${String(m.method || 'GET')} ${String(m.href || '')} — the client's call onto its own route${at}`
         : m.synthesizedBy === 'queue-job'
@@ -439,7 +439,7 @@ export class ContextBuilder {
       ...kept.map((c) => `- ${renderChain(c)}`),
       '',
       hasSynth
-        ? '_Hops marked `[callback/event …]` are dynamic dispatch bridged by codegraph (with the registration site); the rest are direct calls. codegraph_node any symbol for its body._'
+        ? '_Hops marked `[callback/event …]` are dynamic dispatch bridged by codegraph (with the registration site where it is recorded); the rest are direct calls. codegraph_node any symbol for its body._'
         : '_codegraph_node any symbol above for its source + its own callers/callees._',
     ];
     return '\n' + lines.join('\n') + '\n';
@@ -1081,12 +1081,15 @@ export class ContextBuilder {
       if (typeHierarchyKinds.has(result.node.kind)) {
         const hierarchy = this.traverser.getTypeHierarchy(result.node.id);
         for (const [id, node] of hierarchy.nodes) {
+          if (hierarchyNodesAdded >= maxHierarchyNodes) break;
           if (!nodes.has(id)) {
             nodes.set(id, node);
             hierarchyNodesAdded++;
           }
         }
         for (const edge of hierarchy.edges) {
+          // Keep only edges between nodes that made it into the subgraph.
+          if (!nodes.has(edge.source) || !nodes.has(edge.target)) continue;
           const exists = edges.some(
             (e) => e.source === edge.source && e.target === edge.target && e.kind === edge.kind
           );

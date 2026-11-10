@@ -90,7 +90,8 @@ export const swiftExtractor: LanguageExtractor = {
       const child = node.child(i);
       if (child?.type === 'modifiers') {
         const text = child.text;
-        if (text.includes('public')) return 'public';
+        // `open` is the public-API level, more permissive than `public`.
+        if (/\bopen\b/.test(text) || text.includes('public')) return 'public';
         if (text.includes('private')) return 'private';
         if (text.includes('internal')) return 'internal';
         if (text.includes('fileprivate')) return 'private';

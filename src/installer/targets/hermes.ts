@@ -154,7 +154,7 @@ function topLevelRange(lines: string[], key: string): LineRange | null {
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (line.trim() === '') continue;
-    if (/^[A-Za-z_][A-Za-z0-9_-]*:\s*(?:#.*)?$/.test(line)) {
+    if (/^[A-Za-z_][A-Za-z0-9_-]*:(?:\s|$)/.test(line)) {
       end = i;
       break;
     }
@@ -317,6 +317,16 @@ function upsertCodeGraphToolset(content: string): string {
     return joinLines(lines);
   }
 
+  // An inline list (`cli: [hermes-cli, browser]`) is edited in place: a second
+  // block-style `cli:` key would make the YAML invalid.
+  const flow = parent ? flowCliLine(lines, parent) : -1;
+  if (parent && flow !== -1) {
+    const items = flowItems(lines[flow] ?? '');
+    if (items.includes('mcp-codegraph')) return joinLines(lines);
+    lines[flow] = rewriteFlowCli(lines[flow] ?? '', [...items, 'mcp-codegraph']);
+    return joinLines(lines);
+  }
+
   if (!cli) {
     lines.splice(parent.end, 0, '  cli:', '    - hermes-cli', '    - mcp-codegraph');
     return joinLines(lines);
@@ -335,7 +345,13 @@ function removeCodeGraphToolset(content: string): string {
   const lines = splitLines(content);
   const parent = topLevelRange(lines, 'platform_toolsets');
   const cli = parent ? listChildBlock(lines, parent, 'cli') : null;
-  if (!cli) return content;
+  if (!cli) {
+    const flow = parent ? flowCliLine(lines, parent) : -1;
+    const items = flow === -1 ? [] : flowItems(lines[flow] ?? '');
+    if (!items.includes('mcp-codegraph')) return content;
+    lines[flow] = rewriteFlowCli(lines[flow] ?? '', items.filter((item) => item !== 'mcp-codegraph'));
+    return joinLines(lines);
+  }
 
   const hasEntry = lines
     .slice(cli.start + 1, cli.end)
@@ -347,6 +363,24 @@ function removeCodeGraphToolset(content: string): string {
     return line.trim() !== '- mcp-codegraph';
   });
   return joinLines(next);
+}
+
+/** Index of an inline `  cli: [a, b]` line inside platform_toolsets, or -1. */
+function flowCliLine(lines: string[], parent: LineRange): number {
+  for (let i = parent.start + 1; i < parent.end; i++) {
+    if (/^  cli:\s*\[[^\]]*\]\s*(?:#.*)?$/.test(lines[i] ?? '')) return i;
+  }
+  return -1;
+}
+
+function flowItems(line: string): string[] {
+  const inner = line.slice(line.indexOf('[') + 1, line.indexOf(']'));
+  return inner.split(',').map((item) => item.trim()).filter((item) => item !== '');
+}
+
+function rewriteFlowCli(line: string, items: string[]): string {
+  const trailing = line.match(/\]\s*(#.*)$/)?.[1];
+  return `  cli: [${items.join(', ')}]${trailing ? ` ${trailing}` : ''}`;
 }
 
 function arrayEqual(a: string[], b: string[]): boolean {

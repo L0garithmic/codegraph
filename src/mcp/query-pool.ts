@@ -252,7 +252,8 @@ export class QueryPool {
     const job = this.inflight.get(w);
     this.inflight.delete(w);
     try { void w.terminate(); } catch { /* already gone */ }
-    if (this.healthy) this.spawnOne(); // keep capacity
+    // Keep capacity, but within the same cold-start limit drain() enforces.
+    if (this.healthy && this.pendingWorkers.size < MAX_CONCURRENT_SPAWN) this.spawnOne();
     if (job) {
       if (job.retries < this.maxRetries && this.healthy) {
         job.retries++;

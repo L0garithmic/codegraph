@@ -609,7 +609,8 @@ function writeErrorLog(projectPath: string, errors: Array<{ message: string; fil
   const noFileErrors: Array<{ message: string; code?: string }> = [];
 
   for (const err of errors) {
-    if (err.severity !== 'error') continue;
+    // Hard errors, plus the salvaged-file warnings the printed summary points here for.
+    if (err.severity !== 'error' && err.code !== 'salvaged_stripped') continue;
     if (err.filePath) {
       let list = errorsByFile.get(err.filePath);
       if (!list) {
@@ -744,8 +745,9 @@ async function runInit(
     // rather than leaving the user with a silent 0-node "Done". (#1156)
     // Under --yes the offer prints its one-line opt-in snippet instead of
     // prompting (same as a non-TTY run).
+    let finalResult = result;
     if (result.nodesCreated === 0) {
-      await offerIndexIgnoredRepos(clack, projectPath, runIndex, { interactive: !options.yes });
+      finalResult = (await offerIndexIgnoredRepos(clack, projectPath, runIndex, { interactive: !options.yes })) ?? result;
     }
 
     try {
@@ -753,8 +755,12 @@ async function runInit(
       await offerWatchFallback(clack, projectPath, { yes: options.yes });
     } catch { /* non-fatal */ }
 
-    clack.outro('Done');
     cg.destroy();
+    if (!finalResult.success) {
+      clack.log.error('Indexing did not complete; see the messages above.');
+      process.exit(1);
+    }
+    clack.outro('Done');
   } catch (err) {
     clack.log.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -2531,13 +2537,8 @@ program
       // Custom filter pattern
       let customFilter: RegExp | null = null;
       if (options.filter) {
-        // Convert glob to regex: ** → .+, * → [^/]*, . → \.
-        const regex = options.filter
-          .replace(/[+[\]{}()^$|\\]/g, '\\$&')
-          .replace(/\./g, '\\.')
-          .replace(/\*\*/g, '.+')
-          .replace(/\*/g, '[^/]*');
-        customFilter = new RegExp(regex);
+        // Same glob vocabulary as `files` (globToRegex), so `?` and `**` match alike.
+        customFilter = globToRegex(options.filter);
       }
 
       // One notion of "a test" for the whole tool (#1507): the CLI used to keep
@@ -2555,13 +2556,12 @@ program
       const allDependents = new Set<string>();
 
       for (const file of changedFiles) {
-        // If the changed file is itself a test file, include it
-        if (isTestFile(file)) {
-          affectedTests.add(file);
-          continue;
-        }
+        // If the changed file is itself a test file, include it; it is still
+        // traversed, since another test may import it.
+        if (isTestFile(file)) affectedTests.add(file);
 
-        // BFS through dependents
+        // BFS through dependents. Test files are recorded but also traversed,
+        // so a test that imports another test is found within the depth limit.
         const queue: Array<{ file: string; depth: number }> = [{ file, depth: 0 }];
         const visited = new Set<string>();
         visited.add(file);
@@ -2576,11 +2576,8 @@ program
             visited.add(dep);
             allDependents.add(dep);
 
-            if (isTestFile(dep)) {
-              affectedTests.add(dep);
-            } else {
-              queue.push({ file: dep, depth: current.depth + 1 });
-            }
+            if (isTestFile(dep)) affectedTests.add(dep);
+            queue.push({ file: dep, depth: current.depth + 1 });
           }
         }
       }

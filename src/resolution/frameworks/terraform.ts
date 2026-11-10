@@ -138,7 +138,7 @@ function resolveScopedModuleRef(
     .filter((n) => n.kind === 'module');
   if (decls.length === 0) return null;
   // Terraform scoping: the declaration lives in the reference's directory.
-  const decl = decls.find((d) => dirOf(d.filePath) === refDir) ?? (decls.length === 1 ? decls[0]! : null);
+  const decl = decls.find((d) => dirOf(d.filePath) === refDir) ?? null;
   if (!decl) return null;
 
   const source = readModuleAttr(decl, 'source', context);

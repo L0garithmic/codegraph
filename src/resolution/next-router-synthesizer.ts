@@ -66,11 +66,12 @@ export async function nextLinkEdges(ctx: ResolutionContext, onYield: MaybeYield)
         const ch = safe[at];
         if (ch === '"' || ch === "'" || ch === '`') literal = readStringAt(safe, at);
         else if (ch === '{') {
-          const key = /\bpathname\s*:\s*/y;
+          // `at` is the object literal's own `{`: match the pathname key there, on
+          // the full source, so the sticky offset and the match agree.
+          const key = /\{\s*pathname\s*:\s*/y;
           key.lastIndex = at;
-          const close = safe.indexOf('}', at);
-          const head = key.exec(safe.slice(0, close < 0 ? undefined : close).slice(at));
-          if (head) literal = readStringAt(safe, at + head.index + head[0].length);
+          const head = key.exec(safe);
+          if (head) literal = readStringAt(safe, at + head[0].length);
         }
       }
       if (literal === null) continue;

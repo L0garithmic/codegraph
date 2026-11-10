@@ -151,7 +151,7 @@ export function findDynamicBoundaries(
   let charsScanned = 0;
 
   for (const node of scanList) {
-    if (sites >= maxSites || scanned >= MAX_SCAN || charsScanned > MAX_TOTAL_CHARS) break;
+    if (sites >= maxSites || scanned >= MAX_SCAN || charsScanned >= MAX_TOTAL_CHARS) break;
     if (seenNode.has(node.id) || !node.startLine || !node.endLine) continue;
     seenNode.add(node.id);
     const absPath = validatePathWithinRoot(projectRoot, node.filePath);
@@ -162,7 +162,12 @@ export function findDynamicBoundaries(
     } catch {
       continue;
     }
-    const body = content.split('\n').slice(node.startLine - 1, node.endLine).join('\n');
+    // Clip to the characters left in the budget: one oversized body must not bypass it.
+    const body = content
+      .split('\n')
+      .slice(node.startLine - 1, node.endLine)
+      .join('\n')
+      .slice(0, MAX_TOTAL_CHARS - charsScanned);
     scanned++;
     charsScanned += body.length;
 

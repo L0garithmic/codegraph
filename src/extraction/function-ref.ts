@@ -361,22 +361,27 @@ const PASCAL_SPEC: FnRefSpec = {
 };
 
 /**
- * PHP core functions whose string arguments are CALLABLES — the positional
- * prior that makes a bare string trustworthy as a function reference.
+ * PHP core functions whose CALLABLE argument positions make a string there
+ * trustworthy as a function reference. Each value lists the 0-based positions
+ * of the callable; `-1` means the last argument (the variadic callback forms of
+ * the `array_u*` family). A string in any other position is data, not a callable
+ * (`call_user_func('handler', 'payload')` names `handler`, never `payload`).
  * Deliberately core-PHP only; framework registries (WordPress `add_action`)
  * belong in a frameworks/ resolver if ever added.
  */
-const PHP_CALLABLE_HOFS = new Set([
-  'array_map', 'array_filter', 'array_walk', 'array_walk_recursive', 'array_reduce',
-  'usort', 'uasort', 'uksort',
-  'array_udiff', 'array_udiff_assoc', 'array_uintersect', 'array_uintersect_assoc',
-  'call_user_func', 'call_user_func_array',
-  'forward_static_call', 'forward_static_call_array',
-  'preg_replace_callback', 'preg_replace_callback_array',
-  'register_shutdown_function', 'register_tick_function',
-  'set_error_handler', 'set_exception_handler', 'spl_autoload_register',
-  'ob_start', 'iterator_apply', 'header_register_callback',
-  'is_callable',
+const PHP_CALLABLE_HOFS: ReadonlyMap<string, readonly number[]> = new Map<string, readonly number[]>([
+  ['array_map', [0]], ['array_filter', [1]], ['array_walk', [1]], ['array_walk_recursive', [1]],
+  ['array_reduce', [1]],
+  ['usort', [1]], ['uasort', [1]], ['uksort', [1]],
+  ['array_udiff', [-1]], ['array_udiff_assoc', [-1]], ['array_uintersect', [-1]],
+  ['array_uintersect_assoc', [-1]],
+  ['call_user_func', [0]], ['call_user_func_array', [0]],
+  ['forward_static_call', [0]], ['forward_static_call_array', [0]],
+  ['preg_replace_callback', [1]],
+  ['register_shutdown_function', [0]], ['register_tick_function', [0]],
+  ['set_error_handler', [0]], ['set_exception_handler', [0]], ['spl_autoload_register', [0]],
+  ['ob_start', [0]], ['iterator_apply', [1]], ['header_register_callback', [0]],
+  ['is_callable', [0]],
 ]);
 
 const PHP_SPEC: FnRefSpec = {
@@ -780,8 +785,8 @@ function normalizeSpecial(
     // `'Cls::method'` string becomes a qualified candidate.
     case 'encapsed_string':
     case 'string': {
-      const callee = phpEnclosingCallName(node);
-      if (!callee || !PHP_CALLABLE_HOFS.has(callee)) return [];
+      const site = phpEnclosingCallArg(node);
+      if (!site || !phpIsCallableArg(site)) return [];
       const content = phpStringContent(node, source);
       if (!content) return [];
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(content)) {
@@ -846,19 +851,42 @@ function phpStringContent(node: SyntaxNode, source: string): string | null {
   return null;
 }
 
-/** The function name of the PHP call whose arguments contain `node`, if any. */
-function phpEnclosingCallName(node: SyntaxNode): string | null {
-  let cur: SyntaxNode | null = node.parent;
-  for (let hops = 0; cur && hops < 4; hops++, cur = cur.parent) {
-    if (cur.type === 'function_call_expression') {
-      const fn = getChildByField(cur, 'function');
-      return fn ? fn.text : null;
+/**
+ * The PHP function call whose argument list directly holds `node`: the callee
+ * name, the argument's 0-based position, and the argument count. Null for
+ * method calls (not core HOFs) and for anything not a direct argument.
+ */
+function phpEnclosingCallArg(
+  node: SyntaxNode
+): { callee: string; index: number; count: number } | null {
+  let child: SyntaxNode = node;
+  for (let hops = 0; child.parent && hops < 4; hops++) {
+    const parent: SyntaxNode = child.parent;
+    if (parent.type === 'arguments') {
+      const call = parent.parent;
+      if (!call || call.type !== 'function_call_expression') return null;
+      const fn = getChildByField(call, 'function');
+      if (!fn) return null;
+      let index = -1;
+      for (let i = 0; i < parent.namedChildCount; i++) {
+        if (parent.namedChild(i)?.id === child.id) index = i;
+      }
+      if (index < 0) return null;
+      return { callee: fn.text, index, count: parent.namedChildCount };
     }
-    if (cur.type === 'member_call_expression' || cur.type === 'scoped_call_expression') {
+    if (parent.type === 'member_call_expression' || parent.type === 'scoped_call_expression') {
       return null; // method calls aren't core HOFs
     }
+    child = parent;
   }
   return null;
+}
+
+/** Is the argument at `site` one of the callable positions of its function? */
+function phpIsCallableArg(site: { callee: string; index: number; count: number }): boolean {
+  const positions = PHP_CALLABLE_HOFS.get(site.callee);
+  if (!positions) return false;
+  return positions.some((p) => (p === -1 ? site.index === site.count - 1 : p === site.index));
 }
 
 /** The Ruby `call` node whose argument_list (or keyword pair) contains `node`. */

@@ -7,6 +7,7 @@
 import { Node } from '../../types';
 import { FrameworkResolver, UnresolvedRef, ResolvedRef, ResolutionContext } from '../types';
 import { stripCommentsForRegex } from '../strip-comments';
+import { matchDelim } from '../delimiter-match';
 import { resolveImportPath } from '../import-resolver';
 import { dependsOn } from './package-deps';
 
@@ -14,26 +15,6 @@ function extractTailIdent(expr: string): string | null {
   const cleaned = expr.replace(/\s+/g, '').replace(/\(\)$/, '');
   const m = cleaned.match(/(?:\.|^)([A-Za-z_][A-Za-z0-9_]*)$/);
   return m ? m[1]! : null;
-}
-
-/**
- * Index of the delimiter matching the one at `open`, skipping string/template
- * literals so a `)` or `}` inside a string doesn't throw off the balance.
- */
-function matchDelim(s: string, open: number, oc: string, cc: string): number {
-  let depth = 0;
-  for (let i = open; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === '"' || ch === "'" || ch === '`') {
-      const q = ch;
-      i++;
-      while (i < s.length && s[i] !== q) { if (s[i] === '\\') i++; i++; }
-      continue;
-    }
-    if (ch === oc) depth++;
-    else if (ch === cc) { depth--; if (depth === 0) return i; }
-  }
-  return -1;
 }
 
 // Express res/req methods + common JS builtins — calls to these inside a handler
@@ -48,6 +29,35 @@ const RESERVED_CALLS = new Set([
   'log', 'error', 'warn', 'info', 'String', 'Number', 'Boolean', 'Array', 'Object',
   'Date', 'Math', 'JSON', 'Promise', 'require', 'fail', 'redirect',
 ]);
+
+/** Receivers whose RESERVED_CALLS names are framework noise (`res.json`, `Promise.all`). */
+const FRAMEWORK_RECEIVERS = new Set([
+  'req', 'request', 'res', 'response', 'reply', 'rep', 'ctx', 'app', 'router',
+  'Promise', 'JSON', 'Object', 'Array', 'Math', 'String', 'Number', 'Boolean',
+  'Date', 'console', 'Reflect', 'Symbol', 'Buffer', 'process',
+]);
+
+/**
+ * The call names in an inline handler body that deserve a `calls` edge, each once.
+ * A reserved name is noise only bare or on a framework receiver: `res.json(…)`
+ * and `then(…)` are skipped, but `userRepository.find(…)` and `cache.get(…)` are
+ * business flow.
+ */
+function handlerCallNames(body: string): string[] {
+  const callRe = /(?:\b([A-Za-z_$][\w$]*)\s*\.\s*|(\)\s*\.\s*))?\b([A-Za-z_$][\w$]*)\s*\(/g;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  let cm: RegExpExecArray | null;
+  while ((cm = callRe.exec(body)) !== null) {
+    const name = cm[3]!;
+    const receiver = cm[1];
+    if (RESERVED_CALLS.has(name) && (receiver === undefined || FRAMEWORK_RECEIVERS.has(receiver))) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
 
 /**
  * The replies an inline handler makes — `res.status(404).json({…})`,
@@ -205,13 +215,7 @@ export const expressResolver: FrameworkResolver = {
             bodyStart += braceAt + 1;
           }
         }
-        const callRe = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-        const seen = new Set<string>();
-        let cm: RegExpExecArray | null;
-        while ((cm = callRe.exec(body)) !== null) {
-          const name = cm[1]!;
-          if (seen.has(name) || RESERVED_CALLS.has(name)) continue;
-          seen.add(name);
+        for (const name of handlerCallNames(body)) {
           references.push({
             fromNodeId: routeNode.id,
             referenceName: name,
@@ -272,13 +276,7 @@ export const expressResolver: FrameworkResolver = {
         };
         nodes.push(routeNode);
         if (args.includes('=>')) {
-          const callRe = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-          const seen = new Set<string>();
-          let cm: RegExpExecArray | null;
-          while ((cm = callRe.exec(args)) !== null) {
-            const name = cm[1]!;
-            if (seen.has(name) || RESERVED_CALLS.has(name)) continue;
-            seen.add(name);
+          for (const name of handlerCallNames(args)) {
             references.push({ fromNodeId: routeNode.id, referenceName: name, referenceKind: 'calls', line, column: 0, filePath, language: lang });
           }
           references.push(...replyRefs(safe, openParen + 1, closeParen, routeNode.id, filePath, lang));
@@ -463,22 +461,27 @@ function resolveMiddleware(
   name: string,
   context: ResolutionContext
 ): string | null {
-  // Try exact name first
-  const candidates = context.getNodesByName(name);
-  const match = candidates.find((n) =>
-    n.name.toLowerCase() === name.toLowerCase() ||
-    n.name.toLowerCase() === name.replace(/Middleware$/i, '').toLowerCase()
+  const MIDDLEWARE_DIRS = ['/middleware/', '/middlewares/'];
+  const inMiddlewareDir = (n: Node): boolean => MIDDLEWARE_DIRS.some((d) => n.filePath.includes(d));
+  // A middleware is a function or method: a variable sharing the name
+  // (`const auth = firebase.auth()`) is not one.
+  const isCallable = (n: Node): boolean => n.kind === 'function' || n.kind === 'method';
+
+  // Try exact name first, preferring the middleware directory
+  const exact = context.getNodesByName(name).filter((n) =>
+    isCallable(n) && (
+      n.name.toLowerCase() === name.toLowerCase() ||
+      n.name.toLowerCase() === name.replace(/Middleware$/i, '').toLowerCase()
+    )
   );
+  const match = exact.find(inMiddlewareDir) ?? exact[0];
   if (match) return match.id;
 
   // Try without Middleware suffix
   const baseName = name.replace(/Middleware$/i, '');
   if (baseName !== name) {
-    const baseCandidates = context.getNodesByName(baseName);
-    const MIDDLEWARE_DIRS = ['/middleware/', '/middlewares/'];
-    const preferred = baseCandidates.filter((n) =>
-      MIDDLEWARE_DIRS.some((d) => n.filePath.includes(d))
-    );
+    const baseCandidates = context.getNodesByName(baseName).filter(isCallable);
+    const preferred = baseCandidates.filter(inMiddlewareDir);
     if (preferred.length > 0) return preferred[0]!.id;
     if (baseCandidates.length > 0) return baseCandidates[0]!.id;
   }

@@ -255,6 +255,21 @@ function familiesOf(language: Language | null | undefined): Family[] {
   return out;
 }
 
+/**
+ * Drop every argument list from a call chain, innermost first, until none is
+ * left: `res.status(getCode(err)).json` is `res.status.json`. A single pass
+ * would leave `res.status(getCode).json`, which no rule matches.
+ */
+function stripArgLists(text: string): string {
+  let prev: string;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(/\([^()]*\)/g, '');
+  } while (out !== prev);
+  return out;
+}
+
 /** Normalise the call text the rules see: `await`/`new` dropped, `?.` as `.`, `this.` kept. */
 export function normaliseCall(text: string): string {
   return text
@@ -274,7 +289,7 @@ export function classifyEffect(input: EffectInput): Effect | null {
   // Rules see the chain without its argument lists: `res.status(404).json`
   // is `res.status.json`, `ResponseEntity.status(HttpStatus.NOT_FOUND).body`
   // is `ResponseEntity.status.body`.
-  const text = normaliseCall(input.text).replace(/\([^()]*\)/g, '');
+  const text = stripArgLists(normaliseCall(input.text));
   if (text === '') return null;
   const families = familiesOf(input.language);
   const project = input.project ?? 'app';
@@ -407,7 +422,7 @@ export function responseStatus(text: string, args: string | null | undefined, _k
     const s = literalStatus(inChain[1]!);
     if (s !== null) return s;
   }
-  const last = (call.replace(/\([^()]*\)/g, '').split(/[.:]/).pop() ?? call).replace(/^new/, '');
+  const last = (stripArgLists(call).split(/[.:]/).pop() ?? call).replace(/^new/, '');
   const a = args ?? '';
   // The status is the argument: `res.status(404)`, `res.sendStatus(204)`, `abort(404)`, `StatusCode(500)`, `c.String(200, …)`, `http.Error(w, m, 500)`.
   if (/^(?:status|sendStatus|code|abort|StatusCode|Status|SendStatus|WriteHeader|String|Data|JSON|IndentedJSON|XML|YAML|HTML|AbortWithStatus|AbortWithStatusJSON|Error|Redirect|head|Problem|error)$/.test(last)) {
@@ -437,7 +452,7 @@ export function responseStatus(text: string, args: string | null | undefined, _k
     }
   }
   // The name says it: `NotFoundException`, `ResponseEntity.notFound().build`, `TypedResults.NoContent`, `Ok`, `Http404`.
-  const segments = call.replace(/\([^()]*\)/g, '').split(/[.:]/).filter(Boolean);
+  const segments = stripArgLists(call).split(/[.:]/).filter(Boolean);
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i]!;
     if (/^(?:json|send|end|render|view|View|Json|Content|File|jsonify|JSONResponse|Response|HttpResponse|JsonResponse|render_template|body|text|html|build|status|type|header|headers|set|res|response|reply|rep|ctx|c|context|this|self|http|w|rw|ResponseEntity|Results|TypedResults|HttpStatus|NextResponse)$/.test(seg)) continue;

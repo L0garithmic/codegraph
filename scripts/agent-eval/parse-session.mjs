@@ -46,13 +46,18 @@ function tally(file) {
 // covers a subagent's throughput; this works for main-thread runs too and is
 // consistent across both paths. `gen` = output, `fresh` = uncached input
 // (input + cache_creation), `cached` = cache reads (≈free), `total` = all.
-function sumTokens(file) {
+// One API response is logged once per content block (thinking, text, tool_use…),
+// each repeating the same usage, so `seen` (shared across main + subagent files)
+// counts each message.id once.
+function sumTokens(file, seen) {
   const t = { gen: 0, fresh: 0, cached: 0 };
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     if (!line) continue;
     let ev; try { ev = JSON.parse(line); } catch { continue; }
     const u = ev.message?.usage;
     if (!u) continue;
+    const id = ev.message?.id;
+    if (id) { if (seen.has(id)) continue; seen.add(id); }
     t.gen += u.output_tokens || 0;
     t.fresh += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     t.cached += u.cache_read_input_tokens || 0;
@@ -81,7 +86,7 @@ console.log(`session: ${sessionId}`);
 console.log(`\nMAIN thread tools:\n${fmt(mainCounts)}`);
 console.log(`\nSUBAGENT tools (${subAgentFiles} subagent transcript${subAgentFiles === 1 ? '' : 's'}):\n${fmt(subCounts)}`);
 
-const explore = subCounts['mcp__codegraph__codegraph_explore'] || mainCounts['mcp__codegraph__codegraph_explore'] || 0;
+const explore = (subCounts['mcp__codegraph__codegraph_explore'] || 0) + (mainCounts['mcp__codegraph__codegraph_explore'] || 0);
 const reads = (subCounts['Read'] || 0) + (mainCounts['Read'] || 0);
 const greps = (subCounts['Grep'] || 0) + (mainCounts['Grep'] || 0) + (subCounts['Bash'] || 0) + (mainCounts['Bash'] || 0);
 console.log(`\nVERDICT: codegraph_explore used ${explore}x | Read ${reads} | Grep/Bash ${greps}`);
@@ -89,9 +94,10 @@ console.log(`\nVERDICT: codegraph_explore used ${explore}x | Read ${reads} | Gre
 // Token totals (main + subagents), consistent across main-thread and subagent runs.
 const tok = { gen: 0, fresh: 0, cached: 0 };
 const addTok = (t) => { tok.gen += t.gen; tok.fresh += t.fresh; tok.cached += t.cached; };
-addTok(sumTokens(join(projDir, sessionId + '.jsonl')));
+const seenMessages = new Set();
+addTok(sumTokens(join(projDir, sessionId + '.jsonl'), seenMessages));
 if (existsSync(subDir)) {
-  for (const f of readdirSync(subDir).filter(f => f.endsWith('.jsonl'))) addTok(sumTokens(join(subDir, f)));
+  for (const f of readdirSync(subDir).filter(f => f.endsWith('.jsonl'))) addTok(sumTokens(join(subDir, f), seenMessages));
 }
 const k = (n) => (n / 1000).toFixed(1) + 'k';
 console.log(`TOKENS: gen ${k(tok.gen)} | fresh-in ${k(tok.fresh)} | cached-in ${k(tok.cached)} | billable≈ ${k(tok.gen + tok.fresh)}`);

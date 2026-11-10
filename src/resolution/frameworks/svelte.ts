@@ -222,7 +222,7 @@ function resolveComponent(
 
   // Prefer same directory
   const fromDir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const sameDir = components.filter((n) => n.filePath.startsWith(fromDir));
+  const sameDir = components.filter((n) => n.filePath.substring(0, n.filePath.lastIndexOf('/')) === fromDir);
   if (sameDir.length > 0) return sameDir[0]!.id;
 
   // No positional signal: only an UNAMBIGUOUS name may resolve — picking

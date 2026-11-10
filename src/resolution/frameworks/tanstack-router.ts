@@ -242,8 +242,12 @@ function composePath(
   decls: Map<string, { path: string | null; parent: string | null }>
 ): string | null {
   const segs: string[] = [];
+  const seen = new Set<string>();
   let cur: string | null = name;
-  for (let hops = 0; cur !== null && hops < 24; hops++) {
+  for (let hops = 0; cur !== null; hops++) {
+    // Too deep or cyclic: an incomplete address is never emitted as a route.
+    if (hops >= 24 || seen.has(cur)) return null;
+    seen.add(cur);
     const decl: { path: string | null; parent: string | null } | undefined = decls.get(cur);
     if (!decl) return null; // a parent declared in another file — not composed
     if (decl.path !== null) {

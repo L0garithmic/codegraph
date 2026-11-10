@@ -168,15 +168,36 @@ const CPP_NON_CLASS_RETURN = new Set([
  * the pointee. Strips cv-qualifiers, `&`/`*`, namespace qualifiers, and other
  * template args. Returns undefined for primitives / void / `auto` / empty.
  */
+const SMART_POINTER_HEAD_RE = /\b(?:std\s*::\s*)?(?:unique_ptr|shared_ptr|weak_ptr|optional)\s*</;
+
+/**
+ * The first template argument of a smart-pointer / optional head at the start
+ * of `t`, scanned with balanced `<…>` so `std::unique_ptr<Box<int>>` yields
+ * `Box<int>`. Undefined when `t` is not such a wrapper or is not closed.
+ */
+function smartPointerFirstTemplateArg(t: string): string | undefined {
+  const head = SMART_POINTER_HEAD_RE.exec(t);
+  if (!head) return undefined;
+  const start = head.index + head[0].length;
+  let depth = 0;
+  for (let i = start; i < t.length; i++) {
+    const ch = t[i];
+    if (ch === '<') depth++;
+    else if (ch === '>' || (ch === ',' && depth === 0)) {
+      if (ch === '>' && depth > 0) { depth--; continue; }
+      if (depth === 0) return t.slice(start, i).trim();
+    }
+  }
+  return undefined;
+}
+
 export function normalizeCppReturnType(raw: string): string | undefined {
   let t = raw.trim();
   if (!t) return undefined;
   // Unwrap smart pointers / optional to their pointee (the thing you call `->` on).
-  const wrapper = t.match(/\b(?:std\s*::\s*)?(?:unique_ptr|shared_ptr|weak_ptr|optional)\s*<\s*([^,>]+?)\s*>/);
-  if (wrapper && wrapper[1]) t = wrapper[1];
-  t = t
-    .replace(/\b(?:const|volatile|typename|struct|class|enum)\b/g, ' ')
-    .replace(/<[^>]*>/g, ' ')
+  for (let inner = smartPointerFirstTemplateArg(t); inner; inner = smartPointerFirstTemplateArg(t)) t = inner;
+  t = stripCppTemplateArgs(t
+    .replace(/\b(?:const|volatile|typename|struct|class|enum)\b/g, ' '))
     .replace(/[*&]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1633,13 +1654,13 @@ export function rewriteCPrefixedDeclMacroInitializers(source: string): string {
  * Function-pointer types (`va_arg(ap, void (*)(int))`) contain parens and
  * are deliberately unmatched. C-only.
  */
-const C_VA_ARG_RE = /\bva_arg[ \t]*\(([^(),]+)(,[^()]*)\)/g;
+const C_VA_ARG_RE = /\b(va_arg[ \t]*)\(([^(),]+)(,[^()]*)\)/g;
 export function blankCVaArgQualifiedTypeArgs(source: string): string {
   if (source.indexOf('va_arg') === -1) return source;
   C_VA_ARG_RE.lastIndex = 0;
-  return source.replace(C_VA_ARG_RE, (m, arg1: string, rest: string) => {
+  return source.replace(C_VA_ARG_RE, (m, head: string, arg1: string, rest: string) => {
     if (/^,[ \t]*[A-Za-z_]\w*[ \t]*$/.test(rest)) return m; // single token — parses natively
-    return `va_arg(${arg1}${rest.replace(/[^\n\r]/g, ' ')})`;
+    return `${head}(${arg1}${rest.replace(/[^\n\r]/g, ' ')})`;
   });
 }
 
@@ -1823,24 +1844,29 @@ export const cppExtractor: LanguageExtractor = {
   // their "parameters" are macro arguments. Mirrored in the kernel.
   getSignature: (node, source) => {
     if ((node.type !== 'function_definition' && !isCppConstructorDeclaration(node)) || getChildByField(node, 'type')) return undefined;
-    if (recoverCppMacroDefinedName(node, source)) return undefined;
+    if (recoverCppMacroDefinedName(node, source) || recoverSingleArgMacroDefinedName(node, source)) return undefined;
     const declarator = getChildByField(node, 'declarator');
     const parameters = declarator && getChildByField(declarator, 'parameters');
     return parameters ? getNodeText(parameters, source) + (node.type === 'declaration' ? ';' : '') : undefined;
   },
   getVisibility: (node) => {
     // Check for access specifier in parent
+    // The governing specifier is the nearest one BEFORE the member: a member
+    // is labelled by the section it sits in, not by the first section in the body.
     const parent = node.parent;
     if (parent) {
+      let governing: 'public' | 'private' | 'protected' | undefined;
       for (let i = 0; i < parent.childCount; i++) {
         const child = parent.child(i);
-        if (child?.type === 'access_specifier') {
+        if (!child || child.startIndex >= node.startIndex) break;
+        if (child.type === 'access_specifier') {
           const text = child.text;
-          if (text.includes('public')) return 'public';
-          if (text.includes('private')) return 'private';
-          if (text.includes('protected')) return 'protected';
+          if (text.includes('public')) governing = 'public';
+          else if (text.includes('private')) governing = 'private';
+          else if (text.includes('protected')) governing = 'protected';
         }
       }
+      if (governing) return governing;
     }
     return undefined;
   },

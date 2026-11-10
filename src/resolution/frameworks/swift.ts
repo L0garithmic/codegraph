@@ -306,7 +306,8 @@ export const vaporResolver: FrameworkResolver = {
     }
 
     // Pattern 2: Model references (Fluent)
-    if (/^[A-Z][a-zA-Z]+$/.test(ref.referenceName)) {
+    // A `…Middleware` name is PascalCase too: it belongs to Pattern 3, not here.
+    if (/^[A-Z][a-zA-Z]+$/.test(ref.referenceName) && !ref.referenceName.endsWith('Middleware')) {
       const result = resolveByNameAndKind(ref.referenceName, CLASS_KINDS, FLUENT_MODEL_DIRS, context);
       if (result) {
         return {

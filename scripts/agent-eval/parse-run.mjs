@@ -137,6 +137,10 @@ export function parseSession(files) {
       compactions++;
       timeline.push({ kind: 'compact' });
     }
+    // A subagent's events (parent_tool_use_id set) have their own context window:
+    // they count toward throughput and tool totals, but are tagged `sub` so the
+    // occupancy passes below (reqIdx, gaps, ctxFinal, ctxBase) skip them.
+    const sub = (ev.parent_tool_use_id ?? null) !== null;
     if (ev.type === 'assistant' && ev.message) {
       const id = ev.message.id;
       // One event per content block, same id + same usage: count usage once,
@@ -145,10 +149,10 @@ export function parseSession(files) {
         seenMsgIds.add(id);
         const u = ev.message.usage || {};
         const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-        timeline.push({ kind: 'req', ctx, out: u.output_tokens || 0 });
+        timeline.push({ kind: 'req', ctx, out: u.output_tokens || 0, sub });
       }
       for (const b of ev.message.content || []) {
-        timeline.push({ kind: 'add', family: null, chars: assistantBlockChars(b) });
+        timeline.push({ kind: 'add', family: null, chars: assistantBlockChars(b), sub });
         if (b.type === 'tool_use') {
           nameById.set(b.id, b.name);
           counts[b.name] = (counts[b.name] || 0) + 1;
@@ -182,13 +186,13 @@ export function parseSession(files) {
             if (cliById.has(b.tool_use_id) && !b.is_error) cliContaminated++;
             const name = nameById.get(b.tool_use_id) || '';
             if (/codegraph_explore/.test(name) && !b.is_error) exploreTexts.push(t);
-            timeline.push({ kind: 'add', family: familyOf(name), chars: t.length, tool: name });
+            timeline.push({ kind: 'add', family: familyOf(name), chars: t.length, tool: name, sub });
           } else {
-            timeline.push({ kind: 'add', family: null, chars: textOf([b]).length });
+            timeline.push({ kind: 'add', family: null, chars: textOf([b]).length, sub });
           }
         }
       } else if (typeof content === 'string') {
-        timeline.push({ kind: 'add', family: null, chars: content.length });
+        timeline.push({ kind: 'add', family: null, chars: content.length, sub });
       }
     }
     if (ev.type === 'result') { result = ev; results.push(ev); }
@@ -201,14 +205,16 @@ export function parseSession(files) {
   // visible chars were a 73-char tool_result charged it the whole 830-token
   // delta, 5.5 tok/char). So calibrate the ratio on gaps that are ≥80% tool
   // result by characters, then price every result at that ratio.
-  const reqIdx = timeline.map((t, i) => (t.kind === 'req' ? i : -1)).filter((i) => i >= 0);
+  // Main thread only: a subagent's requests would fake growth/eviction in the parent's window.
+  const occupancy = timeline.filter((t) => !t.sub);
+  const reqIdx = occupancy.map((t, i) => (t.kind === 'req' ? i : -1)).filter((i) => i >= 0);
   const gaps = [];
   for (let k = 1; k < reqIdx.length; k++) {
-    const prev = timeline[reqIdx[k - 1]], cur = timeline[reqIdx[k]];
+    const prev = occupancy[reqIdx[k - 1]], cur = occupancy[reqIdx[k]];
     let chars = 0, toolChars = 0, compacted = false;
     const byFamily = {};
     for (let i = reqIdx[k - 1] + 1; i < reqIdx[k]; i++) {
-      const t = timeline[i];
+      const t = occupancy[i];
       if (t.kind === 'compact') { compacted = true; continue; }
       if (t.kind !== 'add') continue;
       chars += t.chars;
@@ -291,12 +297,12 @@ export function parseSession(files) {
   const residual = Object.fromEntries(FAMILIES.map((f) => [f, 0]));
   for (const q of queue) residual[q.family] += q.tokens;
 
-  const ctxFinal = reqIdx.length ? timeline[reqIdx[reqIdx.length - 1]].ctx : 0;
+  const ctxFinal = reqIdx.length ? occupancy[reqIdx[reqIdx.length - 1]].ctx : 0;
   // The FIRST request's prompt is system + tool schemas + the question, before
   // any tool has answered. Differencing the arms' ctxBase prices codegraph's
   // FIXED occupancy — its tool schema and MCP `initialize` instructions — which
   // it pays whether or not the agent ever calls it.
-  const ctxBase = reqIdx.length ? timeline[reqIdx[0]].ctx : 0;
+  const ctxBase = reqIdx.length ? occupancy[reqIdx[0]].ctx : 0;
   // "Tokens processed" = the SUM of every assistant request's whole prompt. Every
   // request re-counts the prefix, which is what makes this a throughput figure and
   // why it cannot answer the occupancy question (that is `residual`, above).
@@ -539,9 +545,17 @@ export function answerCitations(text, extensions = new Set()) {
   const src = String(text ?? '');
   const paths = new Set();
   // Dotted path with at least one directory: `lib/response.js:126-220`.
-  for (const m of src.matchAll(/(?:[\w@.+-]+\/)+[\w@.+-]+\.[A-Za-z]\w*/g)) paths.add(m[0]);
+  const qualifiedSpans = [];
+  for (const m of src.matchAll(/(?:[\w@.+-]+\/)+[\w@.+-]+\.[A-Za-z]\w*/g)) {
+    paths.add(m[0]);
+    qualifiedSpans.push([m.index, m.index + m[0].length]);
+  }
   // Bare basename, only when its extension is one the envelope actually shipped.
+  // A basename inside an already-cited qualified path is that same citation, not
+  // a second one: `lib/a/utils.js` must not also credit `lib/b/utils.js`.
   for (const m of src.matchAll(/\b[\w@+-]+\.[A-Za-z]\w*/g)) {
+    const start = m.index, end = m.index + m[0].length;
+    if (qualifiedSpans.some(([s, e]) => start >= s && end <= e)) continue;
     const ext = m[0].slice(m[0].lastIndexOf('.') + 1).toLowerCase();
     if (extensions.has(ext)) paths.add(m[0]);
   }

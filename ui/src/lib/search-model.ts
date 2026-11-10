@@ -50,9 +50,12 @@ function lastSegment(name: string): string {
 export function parseFlowQuery(query: string): FlowQuery | null {
   const match = FLOW_SENTENCE.exec(query) ?? FLOW_ARROW.exec(query);
   if (!match) return null;
+  // Equality is judged on the names as written: `Service.load` and `Repo.load`
+  // are two symbols that share a last segment. The last segment is for lookup only.
+  if (match[1] === match[2]) return null;
   const from = lastSegment(match[1] as string);
   const to = lastSegment(match[2] as string);
-  if (!from || !to || from === to) return null;
+  if (!from || !to) return null;
   return { from, to };
 }
 

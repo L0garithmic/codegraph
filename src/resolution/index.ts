@@ -243,9 +243,11 @@ export class ReferenceResolver {
   // `_Imports.razor`, cascading to the project root). Used to disambiguate a
   // markup type ref to the right C# namespace.
   private razorUsingsCache = new Map<string, string[]>();
-  // All per-resolver caches are LRU-bounded. Previously these were
+  // The lookup caches below are LRU-bounded. Previously these were
   // unbounded Maps that grew with every distinct lookup and OOM'd on
   // codebases with 20k+ files (see issue: unbounded cache growth).
+  // Exceptions: razorUsingsCache, methodOwnerIndexCache and nodesByKindCache
+  // are plain Maps (see the comments on each).
   private nodeCache: LRUCache<string, Node[]>; // per-file node cache
   private fileCache: LRUCache<string, string | null>; // per-file content cache
   private importMappingCache: LRUCache<string, ImportMapping[]>;
@@ -418,6 +420,7 @@ export class ReferenceResolver {
     this.fileLinesCache.clear();
     this.methodMatchCache.clear();
     this.methodOwnerIndexCache.clear();
+    this.razorUsingsCache.clear();
     this.supertypeMemo.clear();
     this.supertypeGen++;
     this.nodesByKindCache.clear();

@@ -36,34 +36,46 @@ function collapseWs(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-// --- Per-file memos. Extraction is file-sequential within a worker, so a
-// single-entry memo keyed by filePath is safe (and resets naturally). ---
+// --- Per-extraction state. Each file gets its own state, keyed by the node
+// array that one extraction fills, so nothing carries from one extraction into
+// the next (re-extracting the same path must see that file's own exports and
+// clauses, never the previous run's). ---
 
-/**
- * Exported `name/arity` keys for the current file ('all' for
- * -compile(export_all)). Keyed by arity because `-export([f/1])` exports
- * exactly f/1 — f/2 in the same module stays private (#1610). A malformed
- * `fa` with no arity node falls back to the bare name key.
- */
-let exportsFile = '';
-let exportsMemo: Set<string> | 'all' = new Set();
+interface ErlangFileState {
+  /**
+   * Exported `name/arity` keys for the current file ('all' for
+   * -compile(export_all)), computed once on first use. Keyed by arity because
+   * `-export([f/1])` exports exactly f/1 — f/2 in the same module stays private
+   * (#1610). A malformed `fa` with no arity node falls back to the bare name key.
+   */
+  exports?: Set<string> | 'all';
+  /**
+   * Clause-merge state: the previous fun_decl's name, arity, and node id. A
+   * fun_decl whose clause repeats that (name, arity) is a continuation clause of
+   * the SAME function and attaches to the existing node instead of creating a
+   * duplicate. A same-name DIFFERENT-arity fun_decl is an unrelated function
+   * (Erlang identity is `name/arity`) and gets its own node (#1610). Keying on
+   * adjacency stays safe: clauses of one function must be adjacent in Erlang —
+   * a non-adjacent redefinition of the same name/arity is a compile error.
+   */
+  lastFnName: string;
+  lastFnArity: number;
+  lastFnId: string;
+}
 
-/**
- * Clause-merge state: the previous fun_decl's name, arity, and node id. A
- * fun_decl whose clause repeats that (name, arity) is a continuation clause of
- * the SAME function and attaches to the existing node instead of creating a
- * duplicate. A same-name DIFFERENT-arity fun_decl is an unrelated function
- * (Erlang identity is `name/arity`) and gets its own node (#1610). Keying on
- * adjacency stays safe: clauses of one function must be adjacent in Erlang —
- * a non-adjacent redefinition of the same name/arity is a compile error.
- */
-let lastFnFile = '';
-let lastFnName = '';
-let lastFnArity = -1;
-let lastFnId = '';
+const fileStates = new WeakMap<object, ErlangFileState>();
 
-function moduleExports(node: SyntaxNode, source: string, filePath: string): Set<string> | 'all' {
-  if (filePath === exportsFile) return exportsMemo;
+function fileState(ctx: ExtractorContext): ErlangFileState {
+  let state = fileStates.get(ctx.nodes);
+  if (!state) {
+    state = { lastFnName: '', lastFnArity: -1, lastFnId: '' };
+    fileStates.set(ctx.nodes, state);
+  }
+  return state;
+}
+
+function moduleExports(node: SyntaxNode, source: string, state: ErlangFileState): Set<string> | 'all' {
+  if (state.exports !== undefined) return state.exports;
   let root: SyntaxNode = node;
   while (root.parent) root = root.parent;
   let result: Set<string> | 'all' = new Set<string>();
@@ -90,8 +102,7 @@ function moduleExports(node: SyntaxNode, source: string, filePath: string): Set<
       }
     }
   }
-  exportsFile = filePath;
-  exportsMemo = result;
+  state.exports = result;
   return result;
 }
 
@@ -136,25 +147,26 @@ function handleFunDecl(node: SyntaxNode, ctx: ExtractorContext): boolean {
   const name = atomText(nameNode, ctx.source);
   if (!name) return true;
   const arity = nodeArity(first);
+  const state = fileState(ctx);
 
   // Continuation clause of the SAME function (same name AND arity): extend the
   // existing node's span and attribute this clause's calls to it.
-  if (ctx.filePath === lastFnFile && name === lastFnName && arity === lastFnArity && lastFnId) {
+  if (name === state.lastFnName && arity === state.lastFnArity && state.lastFnId) {
     for (let i = ctx.nodes.length - 1; i >= 0; i--) {
       const n = ctx.nodes[i];
-      if (n && n.id === lastFnId) {
+      if (n && n.id === state.lastFnId) {
         if (node.endPosition.row + 1 > n.endLine) n.endLine = node.endPosition.row + 1;
         break;
       }
     }
-    ctx.pushScope(lastFnId);
-    for (const clause of clauses) ctx.visitFunctionBody(clause, lastFnId);
+    ctx.pushScope(state.lastFnId);
+    for (const clause of clauses) ctx.visitFunctionBody(clause, state.lastFnId);
     ctx.popScope();
     return true;
   }
 
   const spec = precedingSpec(node, name, arity, ctx.source);
-  const exports = moduleExports(node, ctx.source, ctx.filePath);
+  const exports = moduleExports(node, ctx.source, state);
   const fn = ctx.createNode('function', name, node, {
     docstring: getPrecedingDocstring(spec ?? node, ctx.source),
     signature: spec
@@ -172,10 +184,9 @@ function handleFunDecl(node: SyntaxNode, ctx: ExtractorContext): boolean {
   // arguments and guard calls contribute references too.
   for (const clause of clauses) ctx.visitFunctionBody(clause, fn.id);
   ctx.popScope();
-  lastFnFile = ctx.filePath;
-  lastFnName = name;
-  lastFnArity = arity;
-  lastFnId = fn.id;
+  state.lastFnName = name;
+  state.lastFnArity = arity;
+  state.lastFnId = fn.id;
   return true;
 }
 

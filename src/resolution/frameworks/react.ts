@@ -318,8 +318,11 @@ function resolveComponent(
   if (components.length === 0) return null;
 
   // Prefer same directory
-  const fromDir = fromFile.substring(0, fromFile.lastIndexOf('/'));
-  const sameDir = components.filter((n) => n.filePath.startsWith(fromDir));
+  // Same directory means the same parent, not a shared prefix: `src/app` must not
+  // claim `src/application/…`, and a root-level caller (empty parent) only root-level files.
+  const parentDir = (p: string) => p.substring(0, p.lastIndexOf('/'));
+  const fromDir = parentDir(fromFile);
+  const sameDir = components.filter((n) => parentDir(n.filePath) === fromDir);
   if (sameDir.length > 0) return sameDir[0]!.id;
 
   // Prefer component directories

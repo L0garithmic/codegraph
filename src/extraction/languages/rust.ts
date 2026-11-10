@@ -26,8 +26,9 @@ function extractRustReturnType(node: SyntaxNode, source: string): string | undef
   if (!rt || rt.type === 'primitive_type' || rt.type === 'unit_type' || rt.type === 'tuple_type') {
     return undefined;
   }
-  const text = getNodeText(rt, source).trim().replace(/<[^>]*>/g, '');
-  const last = text.split('::').pop()?.trim();
+  // The base type comes from the grammar (`generic_type` → its `type` field), so
+  // nested generics like `Option<Vec<Foo>>` reduce to `Option`.
+  const last = rustImplTypeName(rt, source);
   if (!last || !/^[A-Za-z_]\w*$/.test(last)) return undefined;
   return last === 'Self' ? 'self' : last;
 }

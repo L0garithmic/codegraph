@@ -53,14 +53,28 @@ function emitScalaTypeRefs(typeNode: SyntaxNode, fromId: string, ctx: { addUnres
  * — its type can't be recovered here, so the chain falls through rather than
  * inferring a wrong receiver.
  */
+/** Remove every `[...]` group, nested ones included (`Map[String, List[Foo]]` → `Map`). */
+function stripScalaTypeArgs(s: string): string {
+  let out = '';
+  let depth = 0;
+  for (const c of s) {
+    if (c === '[') depth++;
+    else if (c === ']') {
+      if (depth > 0) depth--;
+    } else if (depth === 0) out += c;
+  }
+  return out;
+}
+
 function extractScalaReturnType(node: SyntaxNode, source: string): string | undefined {
   const rt = node.childForFieldName('return_type');
   if (!rt) return undefined;
   const raw = getNodeText(rt, source).trim();
   if (raw.startsWith('this.')) return undefined; // `this.type` singleton — unhandled
-  const base = raw
-    .replace(/\[[^\]]*\]/g, '') // strip generic args: List[Bar] → List
-    .replace(/\s+/g, '');
+  // Drop every bracket group, nested ones included: Map[String, List[Foo]] → Map.
+  const base = stripScalaTypeArgs(raw).trim();
+  // A compound type (`Foo with Bar`) names no single receiver type.
+  if (/\s/.test(base)) return undefined;
   const last = base.split('.').pop(); // qualified pkg.Bar → Bar
   if (!last || !/^[A-Za-z_]\w*$/.test(last)) return undefined;
   return last;

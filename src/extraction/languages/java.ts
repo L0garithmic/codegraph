@@ -1,6 +1,9 @@
 import type { Node as SyntaxNode } from 'web-tree-sitter';
 import { getNodeText, getChildByField } from '../tree-sitter-helpers';
 import type { ExtractorContext, LanguageExtractor } from '../tree-sitter-types';
+import type { Node as GraphNode } from '../../types';
+
+type Visibility = NonNullable<GraphNode['visibility']>;
 
 /**
  * Tree-sitter-java node types for a method's `type` (return) field that can
@@ -76,6 +79,35 @@ function modifierTextOf(node: SyntaxNode): string {
   return modifiers ? modifiers.text : '';
 }
 
+/**
+ * The access level of a Lombok `@Getter`/`@Setter` on `node`: `undefined` when
+ * the annotation is absent, `PUBLIC` when it has no argument, else the named
+ * `AccessLevel` (`NONE`, `PRIVATE`, `PROTECTED`, `PACKAGE`, `MODULE`).
+ */
+function lombokAccessLevel(node: SyntaxNode, name: string): string | undefined {
+  const modifiers = node.namedChildren.find((c: SyntaxNode) => c.type === 'modifiers');
+  if (!modifiers) return undefined;
+  for (const child of modifiers.namedChildren) {
+    if (child.type !== 'marker_annotation' && child.type !== 'annotation') continue;
+    const nameNode = getChildByField(child, 'name');
+    const simple = nameNode ? nameNode.text.trim().split('.').pop() : undefined;
+    if (simple !== name) continue;
+    return /\b(NONE|PUBLIC|MODULE|PROTECTED|PACKAGE|PRIVATE)\b/.exec(child.text)?.[1] ?? 'PUBLIC';
+  }
+  return undefined;
+}
+
+/** The codegraph visibility a Lombok access level generates at (`NONE` is never emitted). */
+function lombokVisibility(level: string | undefined): Visibility {
+  switch (level) {
+    case 'PRIVATE': return 'private';
+    case 'PROTECTED': return 'protected';
+    case 'PACKAGE':
+    case 'MODULE': return 'internal';
+    default: return 'public';
+  }
+}
+
 function capitalizeJava(name: string): string {
   return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
 }
@@ -121,6 +153,9 @@ function synthesizeLombokMembers(classNode: SyntaxNode, ctx: ExtractorContext): 
   const classSetter = classAnns.has('Setter');
   const isData = classAnns.has('Data');
   const isValue = classAnns.has('Value');
+  // The access level each class-level accessor is generated at (`undefined`: none).
+  const classGetterLevel = lombokAccessLevel(classNode, 'Getter') ?? (classGetter || isData || isValue ? 'PUBLIC' : undefined);
+  const classSetterLevel = lombokAccessLevel(classNode, 'Setter') ?? (classSetter || isData ? 'PUBLIC' : undefined);
   const hasBuilder = classAnns.has('Builder') || classAnns.has('SuperBuilder');
   const hasToString = isData || isValue || classAnns.has('ToString');
   const hasEquals = isData || isValue || classAnns.has('EqualsAndHashCode');
@@ -168,12 +203,12 @@ function synthesizeLombokMembers(classNode: SyntaxNode, ctx: ExtractorContext): 
     anchor: SyntaxNode,
     signature: string,
     fromAnnotation: string,
-    extra: { returnType?: string; isStatic?: boolean } = {}
+    extra: { returnType?: string; isStatic?: boolean; visibility?: Visibility } = {}
   ): void => {
     if (!name || takenMethods.has(name)) return;
     takenMethods.add(name);
     ctx.createNode('method', name, anchor, {
-      visibility: 'public',
+      visibility: extra.visibility ?? 'public',
       signature,
       docstring: `Lombok-generated (${fromAnnotation})`,
       decorators: ['lombok'],
@@ -191,8 +226,12 @@ function synthesizeLombokMembers(classNode: SyntaxNode, ctx: ExtractorContext): 
     const fieldGetter = fieldAnns.has('Getter');
     const fieldSetter = fieldAnns.has('Setter');
 
-    const wantGetter = classGetter || isData || isValue || fieldGetter;
-    const wantSetter = (classSetter || isData || fieldSetter) && !isFinal;
+    // A field's own @Getter/@Setter overrides the class-level one, access level
+    // included: `@Getter(AccessLevel.NONE)` generates no getter even under @Data.
+    const getterLevel = lombokAccessLevel(fd, 'Getter') ?? classGetterLevel;
+    const setterLevel = lombokAccessLevel(fd, 'Setter') ?? classSetterLevel;
+    const wantGetter = getterLevel !== undefined && getterLevel !== 'NONE';
+    const wantSetter = setterLevel !== undefined && setterLevel !== 'NONE' && !isFinal;
     if (!wantGetter && !wantSetter) continue;
 
     const typeNode = getChildByField(fd, 'type');
@@ -211,12 +250,13 @@ function synthesizeLombokMembers(classNode: SyntaxNode, ctx: ExtractorContext): 
         const g = lombokGetterName(fieldName, isBooleanPrimitive);
         emitMethod(g, nameNode, `${typeText} ${g}()`,
           fieldGetter ? '@Getter' : isData ? '@Data' : isValue ? '@Value' : '@Getter',
-          { returnType });
+          { returnType, visibility: lombokVisibility(getterLevel) });
       }
       if (wantSetter) {
         const s = lombokSetterName(fieldName, isBooleanPrimitive);
         emitMethod(s, nameNode, `void ${s}(${typeText} ${fieldName})`,
-          fieldSetter ? '@Setter' : isData ? '@Data' : '@Setter');
+          fieldSetter ? '@Setter' : isData ? '@Data' : '@Setter',
+          { visibility: lombokVisibility(setterLevel) });
       }
     }
   }

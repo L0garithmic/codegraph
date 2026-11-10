@@ -4,6 +4,23 @@
  */
 
 import type { Node } from '../types';
+import type { ResolutionContext } from './types';
+
+/**
+ * The workspace module directory that owns a file (longest match wins), or ''
+ * for the whole project. Shared by the ArkUI emitter and router passes so a
+ * route and an emitter key always scope to the same module.
+ */
+export function arkuiModuleScopeOf(ctx: ResolutionContext): (file: string) => string {
+  const ws = ctx.getWorkspacePackages?.();
+  const moduleDirs = ws ? [...new Set(ws.byName.values())].sort((a, b) => b.length - a.length) : [];
+  return (file: string): string => {
+    for (const dir of moduleDirs) {
+      if (file === dir || file.startsWith(dir + '/')) return dir;
+    }
+    return '';
+  };
+}
 
 /** The kinds a call site can be attributed to. */
 export const FN_KINDS: ReadonlySet<string> = new Set(['method', 'function', 'component']);
@@ -56,11 +73,23 @@ export function enclosingFn(nodesInFile: readonly Node[], line: number): Node | 
  */
 export function enclosingValue(nodesInFile: readonly Node[], line: number): Node | null {
   let best: Node | null = null;
+  let bestSpan = Infinity;
   for (const n of nodesInFile) {
     if (n.kind !== 'constant' && n.kind !== 'variable') continue;
     const end = n.endLine ?? n.startLine;
     if (n.startLine <= line && end >= line) {
-      if (!best || n.startLine >= best.startLine) best = n;
+      // Smallest range wins; ties go to the later-starting node, then to the
+      // lower id, so the answer never depends on the order nodes arrive in.
+      const span = end - n.startLine;
+      if (
+        !best ||
+        span < bestSpan ||
+        (span === bestSpan &&
+          (n.startLine > best.startLine || (n.startLine === best.startLine && n.id < best.id)))
+      ) {
+        best = n;
+        bestSpan = span;
+      }
     }
   }
   return best;

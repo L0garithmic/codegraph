@@ -79,7 +79,7 @@ export const aspnetResolver: FrameworkResolver = {
     }
 
     // Pattern 2: Service references (dependency injection)
-    if (ref.referenceName.endsWith('Service') || ref.referenceName.startsWith('I') && ref.referenceName.length > 1) {
+    if (ref.referenceName.endsWith('Service') || /^I[A-Z]/.test(ref.referenceName)) {
       const result = resolveByNameAndKind(ref.referenceName, SERVICE_KINDS, SERVICE_DIRS, context);
       if (result) {
         return {
@@ -140,11 +140,6 @@ export const aspnetResolver: FrameworkResolver = {
     const now = Date.now();
     const safe = stripCommentsForRegex(content, 'csharp');
 
-    // Class-level [Route("api/[controller]")] prefix — joined onto each action.
-    let classPrefix = '';
-    const cls = /\[Route\s*\(\s*"([^"]+)"[^)]*\)\]\s*(?:\[[^\]]*\]\s*)*(?:public\s+|sealed\s+|abstract\s+|partial\s+)*class\b/.exec(safe);
-    if (cls) classPrefix = cls[1]!;
-
     // [HttpGet], [HttpGet("path")], [HttpPost("path", Name="x")] — BARE or with a
     // path. (The old regex required a string, so bare attributes — with the route
     // on the class [Route] — were missed; eShopOnWeb was 24 bare / 2 string.)
@@ -153,6 +148,9 @@ export const aspnetResolver: FrameworkResolver = {
     while ((match = attrRegex.exec(safe)) !== null) {
       const verb = match[1]!;
       const method = verb.replace(/^Http/, '').toUpperCase();
+      // The class-level [Route("api/[controller]")] prefix of the class this action sits in.
+      const classIndex = enclosingClassIndex(safe, match.index);
+      const classPrefix = classIndex >= 0 ? ownRoutePrefix(safe, classIndex) : '';
       const routePath = joinCsPath(classPrefix, match[2] || '');
       const line = safe.slice(0, match.index).split('\n').length;
 
@@ -237,7 +235,6 @@ export const aspnetResolver: FrameworkResolver = {
     // (`$"/api/{groupName}"`, read repo-wide in postExtract) or the class's own
     // `RoutePrefix` literal; here the route is named under the class.
     const groupRegex = /\.Map(Get|Post|Put|Patch|Delete)\s*\(\s*([A-Za-z_]\w*)\s*(?:,\s*"([^"]*)")?\s*\)/g;
-    const routePrefixLiteral = /\bRoutePrefix\s*(?:=>|=)\s*"([^"]+)"/.exec(safe);
     while ((match = groupRegex.exec(safe)) !== null) {
       const [, verb, handlerName, sub] = match;
       const method = verb!.toUpperCase();
@@ -246,6 +243,8 @@ export const aspnetResolver: FrameworkResolver = {
       const classMatch = [...before.matchAll(/\bclass\s+([A-Za-z_]\w*)/g)].pop();
       if (!classMatch) continue;
       const group = classMatch[1]!;
+      // The RoutePrefix literal of THIS group's class body, not the file's first one.
+      const routePrefixLiteral = /\bRoutePrefix\s*(?:=>|=)\s*"([^"]+)"/.exec(classBodyAt(safe, classMatch.index!));
       const routePath = joinCsPath(routePrefixLiteral ? routePrefixLiteral[1]! : `/${group}`, sub ?? '');
       const routeNode: Node = {
         id: `route:${filePath}:${line}:${method}:${routePath}`,
@@ -304,7 +303,7 @@ export const aspnetResolver: FrameworkResolver = {
       const q = /::group:([A-Za-z_]\w*):([A-Z]+):(.*)$/.exec(route.qualifiedName);
       if (!q) continue;
       const content = context.readFile(route.filePath);
-      if (content && /\bRoutePrefix\s*(?:=>|=)\s*"/.test(content)) continue;
+      if (content && groupDeclaresRoutePrefix(content, q[1]!)) continue;
       const name = `${q[2]} ${joinCsPath(head.replace(/\/+$/, '') + '/' + q[1], q[3]!)}`;
       if (name !== route.name) updates.push({ ...route, name });
     }
@@ -316,6 +315,43 @@ export const aspnetResolver: FrameworkResolver = {
 function joinCsPath(prefix: string, sub: string): string {
   const parts = [prefix, sub].map((p) => p.replace(/^\/+|\/+$/g, '')).filter(Boolean);
   return '/' + parts.join('/');
+}
+
+/** Index of the `class` keyword of the class nearest before `index`, or -1. */
+function enclosingClassIndex(safe: string, index: number): number {
+  const matches = [...safe.slice(0, index).matchAll(/\bclass\s+[A-Za-z_]\w*/g)];
+  return matches.length > 0 ? matches[matches.length - 1]!.index! : -1;
+}
+
+/** The [Route] prefix a class declares on its own attributes (the text between the
+ *  previous `;`, `{` or `}` and its `class` keyword), '' when it declares none. */
+function ownRoutePrefix(safe: string, classIndex: number): string {
+  const boundary = Math.max(
+    safe.lastIndexOf(';', classIndex),
+    safe.lastIndexOf('{', classIndex),
+    safe.lastIndexOf('}', classIndex),
+  );
+  const route = /\[Route\s*\(\s*"([^"]+)"/.exec(safe.slice(boundary + 1, classIndex));
+  return route ? route[1]! : '';
+}
+
+/** The `{…}` body of the class whose `class` keyword sits at `classIndex`, braces balanced. */
+function classBodyAt(safe: string, classIndex: number): string {
+  const open = safe.indexOf('{', classIndex);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let i = open; i < safe.length; i++) {
+    if (safe[i] === '{') depth++;
+    else if (safe[i] === '}' && --depth === 0) return safe.slice(open, i + 1);
+  }
+  return safe.slice(open);
+}
+
+/** Whether the class named `group` in `content` declares its own RoutePrefix literal. */
+function groupDeclaresRoutePrefix(content: string, group: string): boolean {
+  const decl = new RegExp(`\\bclass\\s+${group}\\b`).exec(content);
+  if (!decl) return false;
+  return /\bRoutePrefix\s*(?:=>|=)\s*"/.test(classBodyAt(content, decl.index));
 }
 
 /** Extract last identifier from an expression like `MyService.Handler` or `Handler`. */

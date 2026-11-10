@@ -177,7 +177,7 @@ export function buildCodeBlock(
   const merged: Array<[number, number]> = [];
   for (const range of ranges) {
     const last = merged[merged.length - 1];
-    if (last && range[0] <= last[1] + WINDOW_MERGE_GAP) last[1] = Math.max(last[1], range[1]);
+    if (last && range[0] - last[1] - 1 <= WINDOW_MERGE_GAP) last[1] = Math.max(last[1], range[1]);
     else merged.push([...range] as [number, number]);
   }
 

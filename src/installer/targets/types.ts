@@ -15,11 +15,14 @@
 export type Location = 'global' | 'local';
 
 /**
- * Stable string id used in the `--target` CLI flag and the registry
- * lookup. New targets add a value here when they're added to the
- * registry. Keep these short and lowercase.
+ * Every stable target id, used in the `--target` CLI flag and the registry
+ * lookup. This tuple is the single list of ids: `TargetId` is derived from
+ * it, so a new target adds its id here and its object to the registry.
+ * Keep these short and lowercase.
  */
-export type TargetId = 'claude' | 'cursor' | 'codex' | 'opencode' | 'hermes' | 'gemini' | 'antigravity' | 'kiro' | 'copilot-vscode' | 'copilot-cli' | 'copilot-jetbrains';
+export const TARGET_IDS = ['claude', 'cursor', 'codex', 'opencode', 'hermes', 'gemini', 'antigravity', 'kiro', 'copilot-vscode', 'copilot-cli', 'copilot-jetbrains'] as const;
+
+export type TargetId = (typeof TARGET_IDS)[number];
 
 /**
  * Result of `target.detect(location)`.

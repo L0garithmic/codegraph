@@ -94,7 +94,14 @@ gaps.length = 0; maxGap = 0; lastTick = performance.now();
 
 const batchStart = performance.now();
 const results = await Promise.all(Array.from({ length: N }, (_, i) => runOne(i)));
-const batchMs = Math.round(performance.now() - batchStart);
+const batchEnd = performance.now();
+// A batch that blocks and finishes through microtasks can end before the
+// overdue heartbeat ever runs. Record the gap from the last tick to the batch
+// end first, or the very stall being measured is dropped.
+const tailGap = batchEnd - lastTick;
+if (tailGap > 60) gaps.push(Math.round(tailGap));
+if (tailGap > maxGap) maxGap = tailGap;
+const batchMs = Math.round(batchEnd - batchStart);
 clearInterval(hb);
 
 const lat = results.map((r) => r.ms).sort((a, b) => a - b);

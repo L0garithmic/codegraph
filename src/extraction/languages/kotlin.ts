@@ -439,7 +439,9 @@ export const kotlinExtractor: LanguageExtractor = {
     // Kotlin uses suspend keyword for coroutines
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
-      if (child?.type === 'modifiers' && child.text.includes('suspend')) {
+      // Match the `suspend` modifier token itself: an annotation such as
+      // `@Tag("suspend")` contains the word but its text is never exactly `suspend`.
+      if (child?.type === 'modifiers' && child.children.some((m) => m.text === 'suspend')) {
         return true;
       }
     }

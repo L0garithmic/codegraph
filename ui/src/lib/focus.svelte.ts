@@ -58,7 +58,7 @@ export const railFocus = {
   /** Switch rails, landing on the first row rather than an unrelated index. */
   switchTo(rail: RailSide): void {
     focusedRail = rail;
-    if (focusedIndex < 0) focusedIndex = 0;
+    focusedIndex = 0;
   },
   reset(): void {
     focusedRail = 'right';

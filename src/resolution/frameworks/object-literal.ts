@@ -80,24 +80,36 @@ export function readFields(s: string, start: number, end: number): Map<string, {
   let i = start + 1;
   while (i < end) {
     const ch = s[i]!;
-    if (ch === '"' || ch === "'" || ch === '`') {
-      const close = skipString(s, i);
-      if (close < 0) return out;
-      i = close + 1;
-      continue;
-    }
     if (ch === '{' || ch === '[' || ch === '(') {
       const close = matchBracket(s, i);
       if (close < 0) return out;
       i = close + 1;
       continue;
     }
-    const key = /^([A-Za-z_$][\w$]*)\s*:/.exec(s.slice(i, i + 64));
-    if (!key) {
-      i++;
-      continue;
+    // A key is an identifier or a quoted string followed by a colon (`'path': '/users'`).
+    // A quoted string with no colon after it is a value and is stepped over.
+    let name: string;
+    let keyEnd: number;
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const close = skipString(s, i);
+      if (close < 0) return out;
+      const colon = /^\s*:/.exec(s.slice(close + 1, close + 65));
+      if (!colon) {
+        i = close + 1;
+        continue;
+      }
+      name = s.slice(i + 1, close);
+      keyEnd = close + 1 + colon[0].length;
+    } else {
+      const key = /^([A-Za-z_$][\w$]*)\s*:/.exec(s.slice(i, i + 64));
+      if (!key) {
+        i++;
+        continue;
+      }
+      name = key[1]!;
+      keyEnd = i + key[0].length;
     }
-    let j = i + key[0].length;
+    let j = keyEnd;
     const valueAt = j;
     while (j < end) {
       const c = s[j]!;
@@ -116,7 +128,7 @@ export function readFields(s: string, start: number, end: number): Map<string, {
       if (c === ',') break;
       j++;
     }
-    if (!out.has(key[1]!)) out.set(key[1]!, { text: s.slice(valueAt, j), at: i });
+    if (!out.has(name)) out.set(name, { text: s.slice(valueAt, j), at: i });
     i = j + 1;
   }
   return out;

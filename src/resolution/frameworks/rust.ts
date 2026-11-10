@@ -224,9 +224,11 @@ export const rustResolver: FrameworkResolver = {
       const routePath = match[1]!;
       const startLine = safe.slice(0, match.index).split('\n').length;
       const after = match.index + match[0].length;
-      // Bound the resource's method chain at the next resource() to avoid bleed.
+      // Bound the resource's method chain where its expression ends and at the
+      // next resource(), so a sibling app-level `.route(...)` is never read as
+      // this resource's method.
       const nextRes = safe.indexOf('web::resource', after);
-      const end = Math.min(after + 500, nextRes === -1 ? safe.length : nextRes);
+      const end = Math.min(rustExprEnd(safe, after), nextRes === -1 ? safe.length : nextRes);
       const chain = safe.slice(after, end);
 
       const methodTo = /web::(get|post|put|patch|delete|head)\s*\(\s*\)\s*\.to\s*\(\s*([A-Za-z_][\w:]*)/g;
@@ -264,10 +266,38 @@ const FUNCTION_KINDS = new Set(['function']);
 const SERVICE_KINDS = new Set(['struct', 'trait']);
 const STRUCT_KINDS = new Set(['struct']);
 
-/** Index of the ')' that matches the '(' at openIdx, or -1 if unbalanced. */
+/** Index of the closing quote of the string literal opening at `open` (escapes skipped), or the end of `s`. */
+function skipRustString(s: string, open: number): number {
+  for (let j = open + 1; j < s.length; j++) {
+    if (s[j] === '\\') j++;
+    else if (s[j] === '"') return j;
+  }
+  return s.length;
+}
+
+/**
+ * Index where the expression starting at `from` ends: the `)` (or `]`, `}`,
+ * `,`, `;`) that closes its enclosing scope, or the end of `s`.
+ */
+function rustExprEnd(s: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') i = skipRustString(s, i);
+    else if (c === '(') depth++;
+    else if (c === ')') {
+      if (depth === 0) return i;
+      depth--;
+    } else if (depth === 0 && (c === ']' || c === '}' || c === ',' || c === ';')) return i;
+  }
+  return s.length;
+}
+
+/** Index of the ')' that matches the '(' at openIdx, or -1 if unbalanced. String literals are skipped. */
 function findMatchingParen(s: string, openIdx: number): number {
   let depth = 0;
   for (let i = openIdx; i < s.length; i++) {
+    if (s[i] === '"') { i = skipRustString(s, i); continue; }
     if (s[i] === '(') depth++;
     else if (s[i] === ')') {
       depth--;

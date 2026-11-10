@@ -39,11 +39,17 @@ import * as fs from 'fs';
  */
 export function describeFatal(value: unknown): string {
   if (value instanceof Error) {
-    const name = typeof value.name === 'string' && value.name ? value.name : 'Error';
-    // `message` is a plain own/proto string property — reading it does NOT
-    // format the stack (which is what can loop forever, #850).
-    const message = typeof value.message === 'string' ? value.message : '';
-    return message ? `${name}: ${message}` : name;
+    try {
+      const name = typeof value.name === 'string' && value.name ? value.name : 'Error';
+      // `message` is a plain own/proto string property — reading it does NOT
+      // format the stack (which is what can loop forever, #850).
+      const message = typeof value.message === 'string' ? value.message : '';
+      return message ? `${name}: ${message}` : name;
+    } catch {
+      // An Error subclass may define a throwing `name` or `message` getter. This
+      // runs inside the fatal handler, so it must fall back, never throw.
+      return 'Error';
+    }
   }
   try {
     return String(value);

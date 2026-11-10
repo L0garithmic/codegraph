@@ -20,6 +20,8 @@
  *   - Quotes string values with double quotes; escapes `\` and `"`.
  */
 
+import { joinAroundRemovedSection } from './shared';
+
 /**
  * Serialize a record into the body lines of a TOML table. Values
  * supported: string, string[]. Other types throw — the codex MCP
@@ -41,9 +43,29 @@ export function serializeTomlTableBody(values: Record<string, string | string[]>
 }
 
 function quoteString(s: string): string {
-  // TOML basic strings: backslash and double-quote escapes; control
-  // chars not expected in our payload (paths/args).
-  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  // TOML basic strings: backslash, double-quote and control characters
+  // (U+0000–U+001F, U+007F) must be escaped; a raw control char is invalid TOML.
+  const escaped = s.replace(/[\\"\u0000-\u001f\u007f]/g, (ch) => {
+    switch (ch) {
+      case '\\':
+        return '\\\\';
+      case '"':
+        return '\\"';
+      case '\n':
+        return '\\n';
+      case '\r':
+        return '\\r';
+      case '\t':
+        return '\\t';
+      case '\b':
+        return '\\b';
+      case '\f':
+        return '\\f';
+      default:
+        return '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0');
+    }
+  });
+  return '"' + escaped + '"';
 }
 
 /**
@@ -67,10 +89,9 @@ export function upsertTomlTable(
   header: string,
   block: string,
 ): { content: string; action: 'inserted' | 'replaced' | 'unchanged' } {
-  const headerLine = `[${header}]`;
-  const headerIdx = findHeaderIndex(fileContent, headerLine);
+  const headerMatch = findHeaderMatch(fileContent, header);
 
-  if (headerIdx === -1) {
+  if (headerMatch === null) {
     // Insert at end with separating blank line if there's existing content.
     const trimmed = fileContent.trimEnd();
     const sep = trimmed.length > 0 ? '\n\n' : '';
@@ -80,9 +101,14 @@ export function upsertTomlTable(
     };
   }
 
+  const headerIdx = headerMatch.start;
   // Find the end of this block: next table header or EOF.
-  const blockEnd = findNextTableHeader(fileContent, headerIdx + headerLine.length);
-  const existingBlock = fileContent.substring(headerIdx, blockEnd).replace(/\n+$/, '');
+  const blockEnd = findNextTableHeader(fileContent, headerMatch.end);
+  // CRLF-saved files: compare on LF so an identical table reads as unchanged.
+  const existingBlock = fileContent
+    .substring(headerIdx, blockEnd)
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+$/, '');
 
   if (existingBlock === block) {
     return { content: fileContent, action: 'unchanged' };
@@ -110,27 +136,41 @@ export function removeTomlTable(
   fileContent: string,
   header: string,
 ): { content: string; action: 'removed' | 'not-found' } {
-  const headerLine = `[${header}]`;
-  const headerIdx = findHeaderIndex(fileContent, headerLine);
-  if (headerIdx === -1) return { content: fileContent, action: 'not-found' };
+  const headerMatch = findHeaderMatch(fileContent, header);
+  if (headerMatch === null) return { content: fileContent, action: 'not-found' };
 
-  const blockEnd = findNextTableHeader(fileContent, headerIdx + headerLine.length);
-  const before = fileContent.substring(0, headerIdx).replace(/\n+$/, '');
+  const blockEnd = findNextTableHeader(fileContent, headerMatch.end);
+  const before = fileContent.substring(0, headerMatch.start).replace(/\n+$/, '');
   const after = fileContent.substring(blockEnd).replace(/^\n+/, '');
-  const joined = before + (before && after ? '\n\n' : '') + after;
+  const joined = joinAroundRemovedSection(before, after);
   return { content: joined, action: 'removed' };
 }
 
 /**
- * Locate the byte index of a header line (`[foo.bar]`) when it
- * appears at the start of a line. Returns -1 if not found.
+ * Locate the table header whose dotted key equals `header`, in any
+ * spelling TOML allows (`[ foo.bar ]`, `[foo.bar] # note`, CRLF line
+ * endings). Returns the byte span of the header line (without its
+ * newline), or null when no such header exists.
  */
-function findHeaderIndex(content: string, headerLine: string): number {
-  // Search BOL or right after a newline.
-  if (content.startsWith(headerLine)) return 0;
-  const needle = '\n' + headerLine;
-  const idx = content.indexOf(needle);
-  return idx === -1 ? -1 : idx + 1;
+function findHeaderMatch(content: string, header: string): { start: number; end: number } | null {
+  const wanted = header.replace(/[ \t]/g, '');
+  let lineStart = 0;
+  for (;;) {
+    const newlineIdx = content.indexOf('\n', lineStart);
+    const lineEnd = newlineIdx === -1 ? content.length : newlineIdx;
+    const line = content.slice(lineStart, lineEnd);
+    if (isTomlTableHeader(line) && tableHeaderKey(line) === wanted) {
+      return { start: lineStart, end: lineEnd };
+    }
+    if (newlineIdx === -1) return null;
+    lineStart = newlineIdx + 1;
+  }
+}
+
+/** The dotted key inside a `[table]` header line, with spacing removed. */
+function tableHeaderKey(line: string): string | null {
+  const match = /^[ \t]*\[[ \t]*(.*?)[ \t]*\]/.exec(line);
+  return match ? match[1]!.replace(/[ \t]/g, '') : null;
 }
 
 /**

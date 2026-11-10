@@ -289,7 +289,8 @@ export class MyBatisExtractor {
   }
 
   private previewSql(body: string): string {
-    return body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    // A tag ends at the first `>` outside a quoted attribute value: `<if test="a > b">`.
+    return body.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
   }
 
   private computeLineStarts(): void {

@@ -42,8 +42,12 @@ import {
 const JS_LANGS: ReadonlySet<Language> = new Set(['typescript', 'javascript', 'tsx', 'jsx']);
 const JS_FILE = /\.(?:[cm]?[jt]sx?)$/;
 
-/** `.push(await helper(` / `.navigate(obj.helper(` — a navigation call fed by a call. */
-const NAV_FED_BY_CALL = /\.(push|replace|navigate|dismissTo)\(\s*(?:await\s+)?([A-Za-z_$][\w$.]*)\s*\(/g;
+/**
+ * `router.push(await helper(` — a navigation call fed by a call. Group 1 is the
+ * receiver, which must be an Expo Router router (see `expoRouterNames`), so an
+ * ordinary `array.push(helper())` is not a navigation.
+ */
+const NAV_FED_BY_CALL = /([A-Za-z_$][\w$]*)\.(push|replace|navigate|dismissTo)\(\s*(?:await\s+)?([A-Za-z_$][\w$.]*)\s*\(/g;
 
 /** A helper yielding more distinct screens than this is a table, not a decision. */
 const MAX_SCREENS_PER_HELPER = 8;
@@ -70,11 +74,13 @@ export async function expoRouterReturnEdges(ctx: ResolutionContext, onYield: May
     const source = ctx.readFile(file);
     if (!source || !/\.(?:push|replace|navigate|dismissTo)\(/.test(source)) continue;
     const stripped = stripCommentsForRegex(source, 'typescript');
+    const routers = expoRouterNames(stripped);
     NAV_FED_BY_CALL.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = NAV_FED_BY_CALL.exec(stripped)) !== null) {
+      if (!routers.has(m[1]!)) continue;
       const line = stripped.slice(0, m.index).split('\n').length;
-      sites.push({ file, line, method: m[1]!, callee: m[2]! });
+      sites.push({ file, line, method: m[2]!, callee: m[3]! });
     }
   }
   if (sites.length === 0) return [];
@@ -118,6 +124,23 @@ export async function expoRouterReturnEdges(ctx: ResolutionContext, onYield: May
     }
   }
   return edges;
+}
+
+/**
+ * The names that are Expo Router routers in one file: anything imported from
+ * `expo-router` (`import { router } from 'expo-router'`) and any local bound to
+ * `useRouter()`. Receiver evidence — without it a `.push(` is just an array.
+ */
+function expoRouterNames(stripped: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of stripped.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]expo-router['"]/g)) {
+    for (const part of m[1]!.split(',')) {
+      const local = part.trim().split(/\s+as\s+/).pop();
+      if (local) names.add(local);
+    }
+  }
+  for (const m of stripped.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*useRouter\s*\(/g)) names.add(m[1]!);
+  return names;
 }
 
 /**
@@ -169,33 +192,85 @@ function screensInBody(
   // too, and they come FIRST, so first-occurrence-wins kept the annotation's
   // positions: inside no branch, so both navigations read as `always`. The
   // body starts at the arrow, or at the first brace for a declaration.
-  const arrow = body.indexOf('=>');
-  const brace = body.indexOf('{');
-  const scanFrom = arrow >= 0 && (brace < 0 || arrow < brace) ? arrow + 2 : brace >= 0 ? brace + 1 : 0;
   const found = new Map<string, { node: Node; href: string; line: number; column: number }>();
-  for (let i = scanFrom; i < body.length; i++) {
-    const ch = body[i];
-    if (ch !== '"' && ch !== "'" && ch !== '`') continue;
-    const start = i;
-    const literal = readStringAt(body, i);
-    i = stringEnd(body, i);
-    if (literal === null || !literal.startsWith('/')) continue;
-    const href = toHref(literal);
-    if (!href) continue;
-    const segs = normalizeHrefPath(href.path, helper.filePath);
-    if (segs === null) continue;
-    const route = matchRoute(segs, table);
-    if (!route || found.has(route.id)) continue;
-    // `body` begins at column 0 of the helper's first line and the comment
-    // stripper preserves offsets, so the literal's column is exact.
-    const lineStart = body.lastIndexOf('\n', start - 1) + 1;
-    found.set(route.id, {
-      node: route,
-      href: href.display,
-      line: helper.startLine + body.slice(0, start).split('\n').length - 1,
-      column: start - lineStart,
-    });
-    if (found.size > MAX_SCREENS_PER_HELPER) return null;
+  for (const [from, to] of returnedRanges(body)) {
+    for (let i = from; i < to; i++) {
+      const ch = body[i];
+      if (ch !== '"' && ch !== "'" && ch !== '`') continue;
+      const start = i;
+      const literal = readStringAt(body, i);
+      i = stringEnd(body, i);
+      if (literal === null || !literal.startsWith('/')) continue;
+      const href = toHref(literal);
+      if (!href) continue;
+      const segs = normalizeHrefPath(href.path, helper.filePath);
+      if (segs === null) continue;
+      const route = matchRoute(segs, table);
+      if (!route || found.has(route.id)) continue;
+      // `body` begins at column 0 of the helper's first line and the comment
+      // stripper preserves offsets, so the literal's column is exact.
+      const lineStart = body.lastIndexOf('\n', start - 1) + 1;
+      found.set(route.id, {
+        node: route,
+        href: href.display,
+        line: helper.startLine + body.slice(0, start).split('\n').length - 1,
+        column: start - lineStart,
+      });
+      if (found.size > MAX_SCREENS_PER_HELPER) return null;
+    }
   }
   return found.size > 0 ? [...found.values()] : null;
+}
+
+/**
+ * The [from, to) spans of `body` that produce its return value: an arrow's
+ * expression body, or each `return` statement of a block body. A `const x = …`
+ * whose name a return hands back counts too. Literals anywhere else (a logged
+ * `/welcome`, a route used as a log label) are not destinations.
+ */
+function returnedRanges(body: string): Array<[number, number]> {
+  const arrow = body.indexOf('=>');
+  const brace = body.indexOf('{');
+  if (arrow >= 0 && (brace < 0 || arrow < brace) && !body.slice(arrow + 2).trimStart().startsWith('{')) {
+    return [[arrow + 2, body.length]];
+  }
+  const ranges: Array<[number, number]> = [];
+  for (const m of body.matchAll(/\breturn\b/g)) {
+    const from = m.index! + m[0].length;
+    const to = statementEnd(body, from);
+    ranges.push([from, to]);
+    const returned = body.slice(from, to).trim();
+    if (/^[A-Za-z_$][\w$]*$/.test(returned)) {
+      const name = returned.replace(/\$/g, '\\$');
+      const decl = new RegExp(`\\b(?:const|let|var)\\s+${name}\\s*=`).exec(body);
+      if (decl) ranges.push([decl.index + decl[0].length, statementEnd(body, decl.index + decl[0].length)]);
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Where the statement starting at `from` ends: a `;` or an unmatched closer at
+ * the top level, or a newline that does not continue the expression (the line
+ * before or the line after is not an operator, `.`, or an open bracket).
+ */
+function statementEnd(body: string, from: number): number {
+  const CONTINUES = '?:&|+-*/,.([{=';
+  let depth = 0;
+  for (let j = from; j < body.length; j++) {
+    const ch = body[j]!;
+    if (ch === '"' || ch === "'" || ch === '`') { j = stringEnd(body, j); continue; }
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      if (depth === 0) return j;
+      depth--;
+    } else if (ch === ';' && depth === 0) return j;
+    else if (ch === '\n' && depth === 0) {
+      const prev = body.slice(from, j).trimEnd().slice(-1);
+      const next = body.slice(j + 1).trimStart().charAt(0);
+      const continues = (c: string) => c !== '' && CONTINUES.includes(c);
+      if (!continues(prev) && !continues(next)) return j;
+    }
+  }
+  return body.length;
 }

@@ -87,6 +87,13 @@ if (WARM) {
   const t0 = performance.now();
   const r = await clients[0].request('tools/call', { name: 'codegraph_explore', arguments: { query: QUERIES[0] } }, 'warm-0', 120000);
   process.stderr.write(`[repro] warm explore took ${Math.round(performance.now() - t0)}ms (timeout=${!!r.__timeout})\n`);
+  // A failed warm-up means the daemon never reached steady state: abort rather
+  // than report a concurrent wave measured against a cold or broken daemon.
+  if (r.__timeout || r.error || r.result?.isError) {
+    process.stderr.write('[repro] warm explore failed; aborting before the concurrent wave\n');
+    for (const c of clients) c.child.kill();
+    process.exit(1);
+  }
   await sleep(500);
 }
 

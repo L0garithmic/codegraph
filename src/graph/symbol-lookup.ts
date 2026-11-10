@@ -84,19 +84,16 @@ export function matchesSymbol(node: Node, symbol: string): boolean {
   const lastPart = parts[parts.length - 1]!;
   if (node.name !== lastPart) return false;
 
-  // Stage 1: qualified-name containment under the extractor's `::` convention.
-  if (node.qualifiedName.includes(parts.join('::'))) return true;
-
-  // Stage 1b: boundary-aligned suffix under a canonical separator.
+  // Boundary-aligned suffix under a canonical separator.
   //
   // Splitting on EVERY separator assumes no scope component contains one —
   // false for any language whose module names are themselves dotted (Elixir
   // `AppWeb.Format`, a Java/C# package, a Python dotted module). There the
-  // stored qualifiedName is `AppWeb.Format::group`, so the stage-1 spelling
-  // `AppWeb::Format::group` cannot match and a perfectly precise query
-  // resolved to nothing. Canonicalising both sides and requiring the match to
-  // land on a separator boundary handles both conventions with one rule, and
-  // is strictly tighter than the `includes` above.
+  // stored qualifiedName is `AppWeb.Format::group`, so a `::`-joined spelling
+  // cannot match and a perfectly precise query resolved to nothing. Canonicalising
+  // both sides and requiring the match to land on a separator boundary handles
+  // both conventions with one rule. A bare substring is NOT accepted: `Bar::run`
+  // must not match `FooBar::run`.
   const canonicalQuery = canonicalScope(symbol);
   const canonicalNode = canonicalScope(node.qualifiedName);
   if (canonicalNode === canonicalQuery || canonicalNode.endsWith(`.${canonicalQuery}`)) {

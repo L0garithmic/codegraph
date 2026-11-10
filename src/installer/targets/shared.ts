@@ -10,6 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse as parseJsonc } from 'jsonc-parser';
 import {
   CODEGRAPH_INSTRUCTIONS_BLOCK,
   CODEGRAPH_SECTION_START,
@@ -48,6 +49,26 @@ export function getCodeGraphPermissions(): string[] {
   return ['mcp__codegraph__*'];
 }
 
+/** Edit formatting every JSONC config writer uses (opencode, Copilot for VS Code and JetBrains). */
+export const JSONC_FORMATTING = { tabSize: 2, insertSpaces: true, eol: '\n' };
+
+/** A config file's text, or '' when it does not exist. */
+export function readConfigText(file: string): string {
+  if (!fs.existsSync(file)) return '';
+  return fs.readFileSync(file, 'utf-8');
+}
+
+/** Parse JSONC config text; anything that is not an object (or is empty) reads as {}. */
+export function parseConfig(text: string): Record<string, any> {
+  if (!text.trim()) return {};
+  const errors: any[] = [];
+  const result = parseJsonc(text, errors, { allowTrailingComma: true });
+  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
+    return {};
+  }
+  return result as Record<string, any>;
+}
+
 /**
  * Read a JSON file, returning `{}` when missing or unparseable.
  *
@@ -67,7 +88,10 @@ export function readJsonFile(filePath: string): Record<string, any> {
     return {};
   }
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    // Valid JSON that is not an object (null, array, number, string) is not a config
+    // a caller can read `mcpServers` from, so it reads as empty like an unparseable one.
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -110,9 +134,8 @@ function backupUnparseableJson(filePath: string): void {
     console.warn(`  Warning: Could not parse ${path.basename(filePath)}: ${msg}`);
     console.warn(`  A backup will be created before overwriting.`);
   }
-  try {
-    fs.copyFileSync(filePath, filePath + '.backup');
-  } catch { /* ignore backup failure */ }
+  // A failed copy propagates: the write it guards must not replace the user's config.
+  fs.copyFileSync(filePath, filePath + '.backup');
 }
 
 /**
@@ -192,6 +215,16 @@ export function replaceOrAppendMarkedSection(
     return 'updated';
   }
 
+  // A start marker with no end marker after it is a damaged block. Appending a
+  // second block would let the next run pair this stray start with a later end
+  // and delete the user's content between them, so refuse and leave the file alone.
+  if (startIdx !== -1) {
+    throw new Error(
+      `${path.basename(filePath)} has ${startMarker} without a matching ${endMarker} after it; ` +
+      `remove the stray marker and run the install again`,
+    );
+  }
+
   // No markers — append. Preserve existing content with a separating
   // blank line.
   const trimmed = content.trimEnd();
@@ -218,6 +251,15 @@ export function upsertInstructionsEntry(file: string): { path: string; action: '
     CODEGRAPH_SECTION_END,
   );
   return { path: file, action: action === 'appended' ? 'updated' : action };
+}
+
+/**
+ * Rejoin the text on either side of a removed block: one blank line between
+ * them when both sides have content. Shared by every remover so the markdown
+ * and TOML forms of uninstall leave the same spacing.
+ */
+export function joinAroundRemovedSection(before: string, after: string): string {
+  return before + (before && after ? '\n\n' : '') + after;
 }
 
 /**
@@ -249,7 +291,7 @@ export function removeMarkedSection(
 
   const before = content.substring(0, startIdx).trimEnd();
   const after = content.substring(endIdx + endMarker.length).trimStart();
-  const joined = before + (before && after ? '\n\n' : '') + after;
+  const joined = joinAroundRemovedSection(before, after);
 
   if (joined.trim() === '') {
     try { fs.unlinkSync(filePath); } catch { /* ignore */ }

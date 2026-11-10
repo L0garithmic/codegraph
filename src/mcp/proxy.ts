@@ -453,7 +453,7 @@ function startPpidWatchdogNoSocket(onDeath: () => void): void {
  * malicious or broken peer can't OOM us. Times out at 3s — a healthy daemon
  * sends hello immediately on accept.
  */
-function readHelloLine(socket: net.Socket): Promise<DaemonHello> {
+export function readHelloLine(socket: net.Socket): Promise<DaemonHello> {
   return new Promise((resolve, reject) => {
     let buffer = '';
     const cleanup = () => {
@@ -465,13 +465,14 @@ function readHelloLine(socket: net.Socket): Promise<DaemonHello> {
     const onData = (chunk: string | Buffer) => {
       buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       const idx = buffer.indexOf('\n');
-      if (idx === -1) {
-        if (buffer.length > MAX_HELLO_LINE_BYTES) {
-          cleanup();
-          reject(new Error('daemon hello line exceeded size limit'));
-        }
+      // Bound the hello line in bytes whether or not its newline has arrived.
+      const lineBytes = Buffer.byteLength(idx === -1 ? buffer : buffer.slice(0, idx), 'utf8');
+      if (lineBytes > MAX_HELLO_LINE_BYTES) {
+        cleanup();
+        reject(new Error('daemon hello line exceeded size limit'));
         return;
       }
+      if (idx === -1) return;
       const line = buffer.slice(0, idx);
       // Re-emit anything past the newline so the pipe-stage sees it.
       const tail = buffer.slice(idx + 1);

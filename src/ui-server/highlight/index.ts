@@ -209,8 +209,11 @@ async function highlightUncached(
   }
 
   const tokenized = await tokenizeSource(text, language as Language);
-  if (!tokenized || tokenized.spans.length === 0) {
-    return plain(lines, grammar, `The ${grammar} grammar is not available in this build.`);
+  if (!tokenized) {
+    return plain(lines, grammar, `The ${grammar} grammar could not load or parse this text.`);
+  }
+  if (tokenized.spans.length === 0) {
+    return plain(lines, grammar, 'No highlightable tokens in this text.');
   }
 
   return {

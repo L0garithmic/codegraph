@@ -39,6 +39,8 @@ const MAX_EVENTS_PER_REQUEST = 100;
 const DEFAULT_FLUSH_TIMEOUT_MS = 1500;
 /** A crashed sender's claimed file is merged back after this long. */
 const STALE_CLAIM_MS = 60 * 60_000;
+// Per-process counter that makes each claim file name unique (see claimQueue).
+let claimSeq = 0;
 
 export type UsageKind = 'mcp_tool' | 'cli_command';
 export type LifecycleEvent = 'install' | 'index' | 'uninstall';
@@ -161,6 +163,7 @@ export class Telemetry {
   private exitHookInstalled = false;
   private configCache: ConfigFile | null | undefined; // last observed identity, not a lifetime cache
   private intervalHandle: NodeJS.Timeout | null = null;
+  private flushTail: Promise<void> | null = null; // the last queued flush; see flushNow
 
   constructor(opts: TelemetryOptions = {}) {
     this.dir = opts.dir ?? path.join(os.homedir(), '.codegraph');
@@ -228,7 +231,7 @@ export class Telemetry {
       try {
         // Claimed data must not reappear on a later opt-in/crash recovery.
         for (const name of fs.readdirSync(this.dir)) {
-          if (name === 'telemetry-queue.jsonl' || /^telemetry-queue\.sending\.\d+\.jsonl$/.test(name)) {
+          if (name === 'telemetry-queue.jsonl' || /^telemetry-queue\.sending\.\d+(\.\d+)?\.jsonl$/.test(name)) {
             try { fs.rmSync(path.join(this.dir, name), { force: true }); } catch { /* fail silent */ }
           }
         }
@@ -286,6 +289,17 @@ export class Telemetry {
    * next process. Awaited only where latency is invisible (install/init).
    */
   async flushNow(timeoutMs: number = DEFAULT_FLUSH_TIMEOUT_MS): Promise<void> {
+    // One flush at a time per instance: an overlapping flush would claim the
+    // queue while the first still holds its claim, and the second's cleanup
+    // could delete the first's crash-recovery file. An idle instance still
+    // starts its flush synchronously, as before.
+    const previous = this.flushTail;
+    const run = previous ? previous.then(() => this.flushOnce(timeoutMs)) : this.flushOnce(timeoutMs);
+    this.flushTail = run.catch(() => { /* flushOnce never throws */ });
+    await run;
+  }
+
+  private async flushOnce(timeoutMs: number): Promise<void> {
     if (!this.isEnabled()) return;
     try {
       this.persistSync();
@@ -440,9 +454,12 @@ export class Telemetry {
       let existing = '';
       try { existing = fs.readFileSync(this.queuePath, 'utf8'); } catch { /* no queue yet */ }
       let combined = existing + payload;
-      if (combined.length > MAX_BUFFER_BYTES) {
-        combined = combined.slice(combined.length - MAX_BUFFER_BYTES);
-        combined = combined.slice(combined.indexOf('\n') + 1); // drop the partial first line
+      if (Buffer.byteLength(combined, 'utf8') > MAX_BUFFER_BYTES) {
+        // Cap by UTF-8 bytes (the documented limit), then drop the partial first line.
+        const bytes = Buffer.from(combined, 'utf8');
+        const tail = bytes.subarray(bytes.length - MAX_BUFFER_BYTES);
+        const firstNewline = tail.indexOf(0x0a);
+        combined = firstNewline === -1 ? '' : tail.subarray(firstNewline + 1).toString('utf8');
       }
       fs.writeFileSync(this.queuePath, combined);
     } catch {
@@ -456,7 +473,8 @@ export class Telemetry {
    * `recoverStaleClaims` merges back after an hour.
    */
   private claimQueue(): { claimPath: string; lines: BufferLine[] } | null {
-    const claimPath = path.join(this.dir, `telemetry-queue.sending.${process.pid}.jsonl`);
+    // Unique per claim, so two claims in one process never share a file.
+    const claimPath = path.join(this.dir, `telemetry-queue.sending.${process.pid}.${++claimSeq}.jsonl`);
     try {
       fs.renameSync(this.queuePath, claimPath);
     } catch {
@@ -531,8 +549,13 @@ export class Telemetry {
       schema_version: SCHEMA_VERSION,
     };
     const endpoint = this.env.CODEGRAPH_TELEMETRY_ENDPOINT || TELEMETRY_ENDPOINT;
+    // One deadline for the whole send: batches are sequential, so a fresh
+    // timeout per batch would let a flush run for several multiples of timeoutMs.
+    const deadline = Date.now() + timeoutMs;
     for (let i = 0; i < events.length; i += MAX_EVENTS_PER_REQUEST) {
       if (!this.canUseIdentity(identity)) return [];
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return lines.slice(i); // out of time: re-queue the rest
       const chunk = events.slice(i, i + MAX_EVENTS_PER_REQUEST);
       const body = JSON.stringify({ ...envelope, events: chunk });
       this.debug(`POST ${endpoint} (${chunk.length} events)`);
@@ -542,7 +565,7 @@ export class Telemetry {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body,
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(remaining),
         });
       } catch (err) {
         this.debug(`send failed: ${String(err)}`);

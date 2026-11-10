@@ -46,7 +46,16 @@ function extractCsharpReturnType(node: SyntaxNode, source: string): string | und
   if (typeNode.type === 'predefined_type' || typeNode.type === 'array_type') return undefined;
   let t = getNodeText(typeNode, source).trim();
   t = t.replace(/\?+$/, ''); // nullable `Foo?`
-  t = t.replace(/<[^>]*>/g, ''); // generics `List<Foo>` → `List`
+  // generics `List<Foo>` / `List<List<Foo>>` → `List`: balanced depth, so nested
+  // argument lists strip completely (a first-`>` regex left `List>` behind).
+  let depth = 0;
+  let base = '';
+  for (const ch of t) {
+    if (ch === '<') depth++;
+    else if (ch === '>') depth = Math.max(0, depth - 1);
+    else if (depth === 0) base += ch;
+  }
+  t = base;
   const last = t.split('.').pop()?.trim(); // namespace `Ns.Foo` → `Foo`
   if (!last || !/^[A-Za-z_]\w*$/.test(last)) return undefined;
   return last;

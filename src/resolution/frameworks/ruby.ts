@@ -157,9 +157,10 @@ export const railsResolver: FrameworkResolver = {
       const resName = match[2]!;
       const tail = match[3] || '';
       let actions = plural ? PLURAL_ACTIONS : SINGULAR_ACTIONS;
-      const only = tail.match(/only:\s*\[([^\]]*)\]/);
-      const except = tail.match(/except:\s*\[([^\]]*)\]/);
-      const symList = (s: string) => new Set(s.split(',').map((x) => x.trim().replace(/^:/, '')));
+      // `only:` / `except:` take an array (`[:show, :edit]`) or one symbol (`:show`, `'show'`).
+      const only = tail.match(/only:\s*(\[[^\]]*\]|:?\w+|'[^']*'|"[^"]*")/);
+      const except = tail.match(/except:\s*(\[[^\]]*\]|:?\w+|'[^']*'|"[^"]*")/);
+      const symList = (s: string) => new Set(s.replace(/[[\]]/g, '').split(',').map((x) => x.trim().replace(/^:/, '').replace(/^['"]|['"]$/g, '')));
       if (only) { const s = symList(only[1]!); actions = actions.filter((a) => s.has(a)); }
       else if (except) { const s = symList(except[1]!); actions = actions.filter((a) => !s.has(a)); }
       // `resources :articles` → ArticlesController; `resource :user` → UsersController.
@@ -167,7 +168,7 @@ export const railsResolver: FrameworkResolver = {
       const line = safe.slice(0, match.index).split('\n').length;
       for (const action of actions) {
         const spec = RESTFUL_ROUTES[action]!;
-        const path = spec.path(resName);
+        const path = spec.path(resName, !plural);
         const routeNode: Node = {
           id: `route:${filePath}:${line}:${spec.method}:${ctrl}#${action}`,
           kind: 'route',
@@ -193,15 +194,16 @@ export const railsResolver: FrameworkResolver = {
 // Helper functions
 
 // RESTful action → HTTP verb + path. `resources` gets all seven; a singular
-// `resource` omits `index`.
-const RESTFUL_ROUTES: Record<string, { method: string; path: (r: string) => string }> = {
+// `resource` omits `index`. A singular resource addresses the one resource, so
+// its member routes carry no `:id` segment (`singular` is true for `resource`).
+const RESTFUL_ROUTES: Record<string, { method: string; path: (r: string, singular: boolean) => string }> = {
   index:   { method: 'GET',    path: (r) => `/${r}` },
   create:  { method: 'POST',   path: (r) => `/${r}` },
   new:     { method: 'GET',    path: (r) => `/${r}/new` },
-  show:    { method: 'GET',    path: (r) => `/${r}/:id` },
-  edit:    { method: 'GET',    path: (r) => `/${r}/:id/edit` },
-  update:  { method: 'PATCH',  path: (r) => `/${r}/:id` },
-  destroy: { method: 'DELETE', path: (r) => `/${r}/:id` },
+  show:    { method: 'GET',    path: (r, s) => (s ? `/${r}` : `/${r}/:id`) },
+  edit:    { method: 'GET',    path: (r, s) => (s ? `/${r}/edit` : `/${r}/:id/edit`) },
+  update:  { method: 'PATCH',  path: (r, s) => (s ? `/${r}` : `/${r}/:id`) },
+  destroy: { method: 'DELETE', path: (r, s) => (s ? `/${r}` : `/${r}/:id`) },
 };
 const PLURAL_ACTIONS = ['index', 'create', 'new', 'show', 'edit', 'update', 'destroy'];
 const SINGULAR_ACTIONS = ['create', 'new', 'show', 'edit', 'update', 'destroy'];

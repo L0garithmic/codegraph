@@ -18,9 +18,12 @@
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { parseSession, SUFFICIENCY } from './parse-run.mjs';
+import {
+  README_BENCH, pct, avg, avgText, savedText, residualCell, parseFailureReason,
+} from './readme-bench-report.mjs';
 
-const ROOT = process.argv[2] || '/tmp/ab-readme';
-const REPOS = ['vscode', 'excalidraw', 'django', 'tokio', 'okhttp', 'gin', 'alamofire'];
+const ROOT = process.argv[2] || README_BENCH.root;
+const REPOS = README_BENCH.repos.map((r) => r.name);
 
 /** All segment files of one arm's session, in turn order (t1, t2, t3, …). */
 function segments(dir, label) {
@@ -34,11 +37,14 @@ function segments(dir, label) {
   return [first, ...rest];
 }
 
-function parse(dir, label) {
-  const files = segments(dir, label);
+function parse(runDir, label) {
+  const files = segments(runDir, label);
   if (!files) return null;
   const s = parseSession(files);
-  if (!s.ok) return null;
+  if (!s.ok) {
+    console.error(`[dropped] ${runDir}/${label}: did not parse (${parseFailureReason(s.results)})`);
+    return null;
+  }
   const o = s.occupancy;
   return {
     dur: s.dur, tools: s.tools, reads: s.reads, grep: s.grep, cg: s.cg,
@@ -71,7 +77,6 @@ function parse(dir, label) {
 const median = (arr) => { const v = [...arr].sort((a, b) => a - b); const n = v.length; return n === 0 ? 0 : n % 2 ? v[(n - 1) / 2] : (v[n / 2 - 1] + v[n / 2]) / 2; };
 const fmtTime = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.round(s)}s`;
 const fmtTok = (t) => t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : `${Math.round(t / 1000)}k`;
-const pct = (w, wo) => wo > 0 ? Math.round((1 - w / wo) * 100) : 0;
 
 // Exclude MCP-cold-start-raced WITH runs by default — they measure a startup
 // race, not steady-state value. `CG_INCLUDE_RACED=1` keeps them (to see the raw
@@ -117,8 +122,7 @@ for (const { repo, W, WO, racedExcluded } of rows) {
     (racedExcluded ? `  [${racedExcluded} raced run${racedExcluded === 1 ? '' : 's'} excluded]` : '')
   );
 }
-const avg = (a) => a.length ? Math.round(a.reduce((s, x) => s + x, 0) / a.length) : 0;
-console.log(`\nAVERAGE saved:  cost ${avg(savings.cost)}%  ·  tokens ${avg(savings.tokens)}%  ·  time ${avg(savings.time)}%  ·  tool calls ${avg(savings.tools)}%`);
+console.log(`\nAVERAGE saved:  cost ${savedText(avg(savings.cost))}  ·  tokens ${savedText(avg(savings.tokens))}  ·  time ${savedText(avg(savings.time))}  ·  tool calls ${savedText(avg(savings.tools))}`);
 
 // ---- Table 2: residual context occupancy. ----------------------------------
 // WITH's retrieval residual is codegraph's tool output; WITHOUT's is Read +
@@ -141,7 +145,7 @@ for (const { repo, W, WO } of rows) {
   console.log(
     `${repo.padEnd(11)} ${String(median(W.map(x => x.turns)) + '/' + median(WO.map(x => x.turns))).padEnd(7)} ` +
     `${(fmtTok(wCtx) + '→' + fmtTok(woCtx)).padEnd(21)}` +
-    `${(fmtTok(wR) + '→' + fmtTok(woR) + ' (' + pct(wR, woR) + '%)').padEnd(22)}` +
+    `${residualCell(wR, woR, fmtTok).padEnd(22)}` +
     `${(wSc.toFixed(1) + '%→' + woSc.toFixed(1) + '%').padEnd(18)}` +
     `${wSw.toFixed(1)}%→${woSw.toFixed(1)}%`
   );
@@ -151,13 +155,11 @@ for (const { repo, W, WO } of rows) {
 // LARGER. Hardcoding "lower" printed "-82% lower with codegraph" for the case
 // where codegraph in fact occupies 82% MORE — a double negative that reads as a
 // win and inverts the headline. Say which way it went, in words.
-const dir = (v) => (v < 0 ? 'HIGHER' : 'lower');
-const magn = (v) => Math.abs(v);
 console.log(
-  `\nAVERAGE: retrieval residual ${magn(avg(occ.resid))}% ${dir(avg(occ.resid))} with codegraph` +
-  `  ·  share-of-context ${magn(avg(occ.shareCtx))}% ${dir(avg(occ.shareCtx))}`
+  `\nAVERAGE: retrieval residual ${avgText(avg(occ.resid), ' with codegraph')}` +
+  `  ·  share-of-context ${avgText(avg(occ.shareCtx))}`
 );
-if (avg(occ.resid) < 0) {
+if (avg(occ.resid) !== null && avg(occ.resid) < 0) {
   console.log(
     `  ^ codegraph front-loads one large verbatim payload that STAYS resident, where Read/Grep\n` +
     `    churn many small results that evict. Read alongside the cost/token table above: fewer\n` +
@@ -166,8 +168,9 @@ if (avg(occ.resid) < 0) {
   );
 }
 
+const fixed = avg(occ.fixed);
 console.log(
-  `FIXED overhead: codegraph's tool schema + MCP instructions cost ${avg(occ.fixed) >= 0 ? '+' : ''}${avg(occ.fixed)} tok\n` +
+  `FIXED overhead: codegraph's tool schema + MCP instructions cost ${fixed === null ? 'n/a' : `${fixed >= 0 ? '+' : ''}${fixed} tok`}\n` +
   `  of context before any tool is called (median WITH ctxBase - median WITHOUT ctxBase, averaged\n` +
   `  over repos). It is paid whether or not the agent ever calls codegraph.`
 );

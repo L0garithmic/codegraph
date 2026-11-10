@@ -329,13 +329,9 @@ export function isTestPath(filePath: string): boolean {
 
   // --- Directory patterns ---
   if (
-    lower.includes('/tests/') || lower.includes('/test/') ||
-    lower.includes('/__tests__/') || lower.includes('/spec/') ||
-    lower.includes('/specs/') || lower.includes('/testlib/') ||
-    lower.includes('/testing/') || lower.includes('/e2e/') ||
-    lower.startsWith('test/') || lower.startsWith('tests/') ||
-    lower.startsWith('spec/') || lower.startsWith('specs/') ||
-    lower.startsWith('e2e/') ||
+    // Anchored at the root or after a slash, so a project-relative
+    // `__tests__/helpers.ts` matches exactly like `pkg/__tests__/helpers.ts`.
+    /(?:^|\/)(?:tests?|__tests__|specs?|testlib|testing|e2e)\//.test(lower) ||
     // CamelCase test source-set dirs (Kotlin Multiplatform / Gradle / Xcode):
     // jvmTest/, commonTest/, androidTest/, iosTest/, integrationTest/. Capital-led
     // so "latest/" / "manifest/" are not matched.

@@ -111,7 +111,7 @@ export function reactRouterTable(context: ResolutionContext): ReactRouterTable {
     // shorter form is its own entry — collected now, registered after every
     // literal path, so a route someone actually wrote always wins.
     let segs = path.split('/').slice(1);
-    while (segs.length > 1 && isOptionalParam(segs[segs.length - 1]!)) {
+    while (segs.length >= 1 && isOptionalParam(segs[segs.length - 1]!)) {
       segs = segs.slice(0, -1);
       shortened.push({ root, path: '/' + segs.join('/'), node });
     }

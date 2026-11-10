@@ -352,14 +352,45 @@ export class LiquidExtractor {
   }
 
   /**
+   * Byte spans of `{% comment %}` and `{% raw %}` regions (tags included):
+   * the same non-executing rule {@link findTagOccurrences} applies.
+   */
+  private nonExecutingSpans(): Array<[number, number]> {
+    const spans: Array<[number, number]> = [];
+    const tags = /\{%[-]?\s*(\w+|#)([\s\S]*?)[-]?%\}/g;
+    let suppressed: string | undefined;
+    let start = 0;
+    let tag;
+    while ((tag = tags.exec(this.source)) !== null) {
+      const name = tag[1]!;
+      if (suppressed) {
+        if (name === `end${suppressed}`) {
+          spans.push([start, tag.index + tag[0].length]);
+          suppressed = undefined;
+        }
+        continue;
+      }
+      if (name === 'comment' || name === 'raw') {
+        suppressed = name;
+        start = tag.index;
+      }
+    }
+    return spans;
+  }
+
+  /**
    * Extract {% schema %}...{% endschema %} blocks
    */
   private extractSchema(fileNodeId: string): void {
     // Match {% schema %}...{% endschema %}
     const schemaRegex = /\{%[-]?\s*schema\s*[-]?%\}([\s\S]*?)\{%[-]?\s*endschema\s*[-]?%\}/g;
+    const nonExecuting = this.nonExecutingSpans();
     let match;
 
     while ((match = schemaRegex.exec(this.source)) !== null) {
+      // A schema commented out or inside {% raw %} is not a section.
+      const at = match.index;
+      if (nonExecuting.some(([start, end]) => at >= start && at < end)) continue;
       const [fullMatch, schemaContent] = match;
       const startLine = this.getLineNumber(match.index);
       const endLine = this.getLineNumber(match.index + fullMatch.length);

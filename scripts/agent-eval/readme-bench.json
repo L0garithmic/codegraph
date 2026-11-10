@@ -1,0 +1,61 @@
+{
+  "root": "/tmp/ab-readme",
+  "repos": [
+    {
+      "name": "vscode",
+      "questions": [
+        "How does the extension host communicate with the main process?",
+        "Where in that path would a message be dropped if the extension host crashes?",
+        "What would I need to change to add a new message type to that protocol?"
+      ]
+    },
+    {
+      "name": "excalidraw",
+      "questions": [
+        "How does Excalidraw render and update canvas elements?",
+        "Which part of that path decides whether a full re-render happens or an incremental one?",
+        "If I added a new element type, what in that render path would need to change?"
+      ]
+    },
+    {
+      "name": "django",
+      "questions": [
+        "How does Django's ORM build and execute a query from a QuerySet?",
+        "Where in that path is the SQL actually compiled into a string?",
+        "What would I change to add a new lookup type to that pipeline?"
+      ]
+    },
+    {
+      "name": "tokio",
+      "questions": [
+        "How does tokio schedule and run async tasks on its runtime?",
+        "Where does a task move between the local and the global queue in that path?",
+        "What in that path would I touch to add a per-task instrumentation hook?"
+      ]
+    },
+    {
+      "name": "okhttp",
+      "questions": [
+        "How does OkHttp process a request through its interceptor chain?",
+        "Where in that chain is the connection actually acquired?",
+        "What would I change to add a new interceptor stage before the cache?"
+      ]
+    },
+    {
+      "name": "gin",
+      "questions": [
+        "How does gin route requests through its middleware chain?",
+        "Where is the 404 / no-route case handled in that same chain?",
+        "What would I change to add a per-route middleware that runs before the global ones?"
+      ]
+    },
+    {
+      "name": "alamofire",
+      "questions": [
+        "How does Alamofire build, send, and validate a request?",
+        "Where does retry / interceptor logic hook into that path?",
+        "What would I change to add a new validation step to it?"
+      ]
+    }
+  ]
+}

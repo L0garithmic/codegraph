@@ -85,7 +85,7 @@ export function svelteKitTable(context: ResolutionContext): SvelteKitTable {
     addRouteTo(tableAt(root), node.name, node);
     // `[[optional]]` is `:x?`: the route serves the path with and without it.
     let segs = node.name.split('/').slice(1);
-    while (segs.length > 1 && isOptionalParam(segs[segs.length - 1]!)) {
+    while (segs.length > 0 && isOptionalParam(segs[segs.length - 1]!)) {
       segs = segs.slice(0, -1);
       shortened.push({ root, path: '/' + segs.join('/'), node });
     }

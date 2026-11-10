@@ -121,13 +121,8 @@ function parseObjcRNExports(
 ): Array<{ moduleName: string; jsName: string; nativeSelectorFirstKw: string; line: number }> {
   const results: Array<{ moduleName: string; jsName: string; nativeSelectorFirstKw: string; line: number }> = [];
 
-  // RCT_EXPORT_MODULE — one per file by convention. Capture the optional arg.
-  const moduleMatch = source.match(/RCT_EXPORT_MODULE\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)/);
-  // Need a module name to attribute methods. Prefer the explicit macro arg,
-  // then the class name, then bail (no module = nothing useful to register).
-  const moduleName =
-    moduleMatch?.[1] ??
-    (className ? defaultObjcModuleName(className) : null);
+  // Need a module name to attribute methods; bail when there is none.
+  const moduleName = objcModuleName(source, className);
   if (!moduleName) return results;
 
   const lineOf = (idx: number): number => {
@@ -171,6 +166,28 @@ function parseObjcRNExports(
 function findObjcClassName(source: string): string | null {
   const m = source.match(/@implementation\s+([A-Za-z_][A-Za-z0-9_]*)/);
   return m?.[1] ?? null;
+}
+
+/**
+ * The module an ObjC file registers: the explicit `RCT_EXPORT_MODULE(Name)`
+ * arg, else the class name, else null (no module = nothing to register).
+ */
+function objcModuleName(source: string, className: string | null): string | null {
+  const moduleMatch = source.match(/RCT_EXPORT_MODULE\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)/);
+  return moduleMatch?.[1] ?? (className ? defaultObjcModuleName(className) : null);
+}
+
+/** The RN module a native file declares (`RCT_EXPORT_MODULE` / `getName()`), or null when it declares none. */
+function declaredNativeModule(context: ResolutionContext, filePath: string): string | null {
+  const source = context.readFile(filePath);
+  if (!source) return null;
+  if (filePath.endsWith('.m') || filePath.endsWith('.mm')) {
+    return objcModuleName(source, findObjcClassName(source));
+  }
+  if (filePath.endsWith('.java') || filePath.endsWith('.kt')) {
+    return parseJvmRNExports(source)[0]?.moduleName ?? null;
+  }
+  return null;
 }
 
 /**
@@ -405,8 +422,12 @@ function buildRNMaps(context: ResolutionContext): { byJsName: Map<string, Native
         // ObjC methods may share a first keyword across modules; filter by
         // file path to attribute the export to this module's
         // implementation file.
-        const candidates = objcMethodsByFirstKw.get(exp.nativeSelectorFirstKw) ?? [];
-        const node = candidates.find((c) => c.filePath === file) ?? candidates[0];
+        // This file's own implementation only: a same-named method in another
+        // file belongs to another module, and a synthetic `rn-export:` node is
+        // not a native implementation at all.
+        const node = (objcMethodsByFirstKw.get(exp.nativeSelectorFirstKw) ?? []).find(
+          (c) => c.filePath === file && !c.id.startsWith('rn-export:'),
+        );
         if (!node) continue;
         const entry: NativeMethod = { moduleName: exp.moduleName, jsName: exp.jsName, node };
         const arr = byJsName.get(exp.jsName);
@@ -476,7 +497,14 @@ function buildRNMaps(context: ResolutionContext): { byJsName: Map<string, Native
         // have stripped a prefix.
         const objcCands = objcMethodsByFirstKw.get(methodName) ?? [];
         const jvmCands = jvmMethodsByName.get(methodName) ?? [];
-        for (const node of [...objcCands, ...jvmCands]) {
+        // Ownership: a native file that declares its own module only answers
+        // for that module, so two TurboModules sharing a method name do not
+        // cross-wire. A file that declares no module keeps the name match.
+        const owned = (node: Node): boolean => {
+          const declared = declaredNativeModule(context, node.filePath);
+          return declared === null || declared === spec.moduleName;
+        };
+        for (const node of [...objcCands, ...jvmCands].filter(owned)) {
           const entry: NativeMethod = { moduleName: spec.moduleName, jsName: methodName, node };
           const arr = byJsName.get(methodName);
           if (arr) arr.push(entry);

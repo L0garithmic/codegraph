@@ -54,19 +54,24 @@ export class AstroExtractor {
         this.processScriptContent(frontmatter, componentNode.id, 'frontmatter');
       }
 
+      // The frontmatter is code, not markup: blank it out (keeping offsets and
+      // line numbers) so a <script> string inside it is not delegated again.
+      const markup = this.maskSpans(this.source, this.frontmatterSpans(frontmatter));
+
       // Extract and process <script> blocks (client-side, TypeScript-capable)
-      for (const block of this.extractScriptBlocks()) {
+      for (const block of this.extractScriptBlocks(markup)) {
         this.processScriptContent(block, componentNode.id, 'script');
       }
 
-      // Ranges the template scans must skip: frontmatter + <script>/<style>
-      const coveredRanges = this.getCoveredRanges(frontmatter);
+      // The template scans read the markup with only the <script>/<style> spans
+      // blanked; other text on those lines is still template.
+      const template = this.maskSpans(markup, this.embeddedBlockSpans(markup));
 
       // Extract function calls from template expressions ({fn(...)})
-      this.extractTemplateCalls(componentNode.id, coveredRanges);
+      this.extractTemplateCalls(componentNode.id, template);
 
       // Extract component usages from template (<ComponentName>)
-      this.extractTemplateComponents(componentNode.id, coveredRanges);
+      this.extractTemplateComponents(componentNode.id, template);
     } catch (error) {
       this.errors.push({
         message: `Astro extraction error: ${error instanceof Error ? error.message : String(error)}`,
@@ -153,20 +158,20 @@ export class AstroExtractor {
   /**
    * Extract <script> blocks from the template portion
    */
-  private extractScriptBlocks(): Array<{ content: string; startLine: number }> {
+  private extractScriptBlocks(source: string): Array<{ content: string; startLine: number }> {
     const blocks: Array<{ content: string; startLine: number }> = [];
 
     const scriptRegex = /<script(\s[^>]*)?>(?<content>[\s\S]*?)<\/script>/g;
     let match;
 
-    while ((match = scriptRegex.exec(this.source)) !== null) {
+    while ((match = scriptRegex.exec(source)) !== null) {
       const content = match.groups?.content || match[2] || '';
 
       // Calculate the 0-indexed line where the content begins. The content
       // starts right after the opening tag's `>` — its leading `\n` is part
       // of the content, so relative line 1 sits ON the tag's closing line
       // (do not add 1 here; that double-counts the embedded newline).
-      const beforeScript = this.source.substring(0, match.index);
+      const beforeScript = source.substring(0, match.index);
       const scriptTagLine = (beforeScript.match(/\n/g) || []).length;
       const openingTag = match[0].substring(0, match[0].indexOf('>') + 1);
       const openingTagLines = (openingTag.match(/\n/g) || []).length;
@@ -241,28 +246,49 @@ export class AstroExtractor {
   }
 
   /**
-   * Line ranges (0-indexed, inclusive) the template scans must skip:
-   * the frontmatter block and <script>/<style> blocks.
+   * Character spans [start, end) of the frontmatter block, fences included.
    */
-  private getCoveredRanges(
-    frontmatter: { startLine: number; endLine: number } | null
-  ): Array<[number, number]> {
-    const coveredRanges: Array<[number, number]> = [];
+  private frontmatterSpans(frontmatter: { startLine: number; endLine: number } | null): Array<[number, number]> {
+    if (!frontmatter) return [];
+    // From the opening fence line through the closing fence line
+    return [[this.lineOffset(frontmatter.startLine - 1), this.lineOffset(frontmatter.endLine + 1)]];
+  }
 
-    if (frontmatter) {
-      // Cover from the opening fence line through the closing fence line
-      coveredRanges.push([frontmatter.startLine - 1, frontmatter.endLine]);
-    }
-
+  /**
+   * Character spans [start, end) of every <script>/<style> element in `text`.
+   */
+  private embeddedBlockSpans(text: string): Array<[number, number]> {
+    const spans: Array<[number, number]> = [];
     const tagRegex = /<(script|style)(\s[^>]*)?>[\s\S]*?<\/\1>/g;
     let tagMatch;
-    while ((tagMatch = tagRegex.exec(this.source)) !== null) {
-      const startLine = (this.source.substring(0, tagMatch.index).match(/\n/g) || []).length;
-      const endLine = startLine + (tagMatch[0].match(/\n/g) || []).length;
-      coveredRanges.push([startLine, endLine]);
+    while ((tagMatch = tagRegex.exec(text)) !== null) {
+      spans.push([tagMatch.index, tagMatch.index + tagMatch[0].length]);
     }
+    return spans;
+  }
 
-    return coveredRanges;
+  /**
+   * Replace the given spans with spaces, keeping newlines, so every other
+   * character keeps its offset and line number.
+   */
+  private maskSpans(text: string, spans: Array<[number, number]>): string {
+    let masked = '';
+    let pos = 0;
+    for (const [start, end] of spans) {
+      masked += text.slice(pos, start) + text.slice(start, end).replace(/[^\n]/g, ' ');
+      pos = end;
+    }
+    return masked + text.slice(pos);
+  }
+
+  /**
+   * Character offset where 0-indexed line `lineIdx` starts (clamped to the source length).
+   */
+  private lineOffset(lineIdx: number): number {
+    const lines = this.source.split('\n');
+    let offset = 0;
+    for (let i = 0; i < lineIdx && i < lines.length; i++) offset += lines[i]!.length + 1;
+    return Math.min(offset, this.source.length);
   }
 
   /**
@@ -275,19 +301,14 @@ export class AstroExtractor {
    * (the pervasive `{posts.map((post) => (` pattern) contributes the calls
    * on its opening line.
    */
-  private extractTemplateCalls(
-    componentNodeId: string,
-    coveredRanges: Array<[number, number]>
-  ): void {
-    const lines = this.source.split('\n');
+  private extractTemplateCalls(componentNodeId: string, template: string): void {
+    const lines = template.split('\n');
     // Complete groups: {...} — excluding JSX comments ({/* ... */})
     const exprRegex = /\{([^}/][^}]*)\}/g;
     // A group opened but not closed on this line
     const openExprRegex = /\{([^}/][^}]*)$/;
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      if (coveredRanges.some(([start, end]) => lineIdx >= start && lineIdx <= end)) continue;
-
       const line = lines[lineIdx]!;
       const exprs: Array<{ text: string; offset: number }> = [];
 
@@ -333,17 +354,12 @@ export class AstroExtractor {
    * components the way Vue does, so those are real custom elements and
    * are skipped).
    */
-  private extractTemplateComponents(
-    componentNodeId: string,
-    coveredRanges: Array<[number, number]>
-  ): void {
-    const lines = this.source.split('\n');
+  private extractTemplateComponents(componentNodeId: string, template: string): void {
+    const lines = template.split('\n');
     // Opening/self-closing tags (closing tags </Foo> start with </ so won't match)
     const componentTagRegex = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      if (coveredRanges.some(([start, end]) => lineIdx >= start && lineIdx <= end)) continue;
-
       const line = lines[lineIdx]!;
       let match;
       while ((match = componentTagRegex.exec(line)) !== null) {
